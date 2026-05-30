@@ -177,6 +177,41 @@ Once started, visit `http://localhost:8080` in your browser to access both the a
 
 ---
 
+## 🐳 Docker & Docker Compose Instant Deployment Guide
+
+If you wish to utilize Docker for lightweight one-click deployment and management in your production environment, the project has built-in premium containerization support:
+- **Multi-stage Build Dockerfile**: The compilation environment and the production runtime environment are physically isolated, keeping the final production image size at approximately 50MB.
+- **One-click Orchestration**: Spin up the Clash Proxy main service and the persistent PostgreSQL database in unison, with built-in database readiness health checks and service dependencies.
+
+### 1. Instant Startup
+On a server with Docker and Docker Compose installed, you only need to perform the following two simple steps to complete the rapid full-stack deployment:
+
+```bash
+# Step 1: Copy and use the default configuration file optimized for the Docker container network
+cp config.docker.toml config.toml
+
+# Step 2: Spin up all services in the background (including the high-concurrency Go application and the PostgreSQL database)
+docker compose up -d
+```
+
+### 2. Container Service Lifecycle Management
+```bash
+# View the running status, ports, and health status of all container services (automatically verifies database readiness)
+docker compose ps
+
+# Real-time tracking and streaming of container logs
+docker compose logs -f
+
+# Gracefully stop and remove the container cluster (data is persistently saved via Docker volume, keeping it completely safe)
+docker compose down
+```
+
+### 3. Data Backup & Config Maintenance
+* **Configuration Update**: You can modify the `config.toml` file directly on the host machine. After editing, run `docker compose restart app` to restart the application container and apply the updates.
+* **Database Persistence**: The database records are securely stored in the Docker Named Volume `clash-proxy-pgdata`. Even if the container cluster is completely removed and recreated, your data remains safe and sound.
+
+---
+
 ## 📄 License
 
 This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for more details.

@@ -177,6 +177,41 @@ cd release
 
 ---
 
+## 🐳 Docker & Docker Compose 极速部署指南
+
+如果您希望在生产环境中利用 Docker 进行轻量化一键部署与管理，项目已内置了高水准的容器化支持：
+- **多阶段构建 Dockerfile**：编译环境与生产运行环境物理隔离，最终生成的生产镜像仅约为 50MB。
+- **一键容器编排**：联调拉起 Clash Proxy 主服务与持久化的 PostgreSQL 数据库，内置数据库健康检查与服务依赖。
+
+### 1. 快速一键拉起
+在安装了 Docker 及 Docker Compose 的服务器上，仅需执行以下两步即可完成全栈极速部署：
+
+```bash
+# 步骤一：拷贝并使用专为 Docker 容器网络预调优的默认配置文件
+cp config.docker.toml config.toml
+
+# 步骤二：一键在后台启动所有容器服务 (含高并发 Go 主应用与 PostgreSQL 数据库)
+docker compose up -d
+```
+
+### 2. 容器服务生命周期管理
+```bash
+# 查看所有容器服务的运行状态、端口以及健康度 (自动进行数据库就绪检测)
+docker compose ps
+
+# 实时追踪并查看容器的运行日志输出
+docker compose logs -f
+
+# 优雅停止并销毁容器集群 (数据已通过数据卷持久化保存，数据绝对安全)
+docker compose down
+```
+
+### 3. 数据备份与配置文件维护
+* **配置文件更新**：您可以直接在宿主机修改根目录下的 `config.toml` 文件，修改后运行 `docker compose restart app` 重启应用容器即可使最新配置生效。
+* **数据库持久化**：数据库的数据会被安全地保存在 Docker Named Volume `clash-proxy-pgdata` 中，即使容器群被完全删除重建，您的数据依然完好无损。
+
+---
+
 ## 📄 开源协议
 
 本项目基于 **MIT License** 开源。详情参见 [LICENSE](LICENSE) 文件。

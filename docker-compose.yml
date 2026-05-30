@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # =========================================================
+  # Clash Proxy 全栈应用服务
+  # =========================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: clash-proxy-app
+    ports:
+      - "8080:8080"
+    volumes:
+      # 挂载宿主机当前的 config.toml，方便在宿主机直接修改密码等核心配置
+      - ./config.toml:/app/config.toml
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+  # =========================================================
+  # PostgreSQL 数据库服务
+  # =========================================================
+  db:
+    image: postgres:15-alpine
+    container_name: clash-proxy-db
+    environment:
+      POSTGRES_USER: clash_proxy_user
+      POSTGRES_PASSWORD: secure_db_password_9988
+      POSTGRES_DB: clash_proxy_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # 内置健康检测，保证数据库完全就绪并能接受连接后，才允许 app 容器拉起运行
+      test: ["CMD-SHELL", "pg_isready -U clash_proxy_user -d clash_proxy_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+volumes:
+  pgdata:
+    name: clash-proxy-pgdata
