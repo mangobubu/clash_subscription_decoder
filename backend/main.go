@@ -58,6 +58,12 @@ func main() {
 	r.PUT("/api/custom-groups/:id", handleUpdateCustomGroup)
 	r.DELETE("/api/custom-groups/:id", handleDeleteCustomGroup)
 
+	// 注册自定义分流规则 CRUD 接口
+	r.GET("/api/custom-rules", handleGetCustomRules)
+	r.POST("/api/custom-rules", handleCreateCustomRule)
+	r.PUT("/api/custom-rules/:id", handleUpdateCustomRule)
+	r.DELETE("/api/custom-rules/:id", handleDeleteCustomRule)
+
 	// 启动服务，默认监听 8080 端口
 	log.Println("Starting Clash Proxy Decoder backend on :8080...")
 	if err := r.Run(":8080"); err != nil {
@@ -166,6 +172,9 @@ func handleDecode(c *gin.Context) {
 
 	// 🌟 AST 无损注入逻辑：自动将数据库中的自定义组注入到配置的 proxy-groups 中
 	decodedContent = injectCustomGroups(decodedContent)
+
+	// 🌟 AST 无损智能覆盖逻辑：自动将自定义分流规则优先注入并实现订阅规则覆盖去重
+	decodedContent = injectCustomRules(decodedContent)
 
 	// 3. 成功返回
 	c.JSON(http.StatusOK, gin.H{
@@ -362,6 +371,93 @@ func handleUpdateCustomNode(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "更新成功", "data": node})
 }
 
+// handleGetCustomRules 获取所有自定义规则
+func handleGetCustomRules(c *gin.Context) {
+	rules, err := GetCustomRules()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": rules})
+}
+
+// handleCreateCustomRule 创建或保存自定义规则 (支持按 Type 和 Payload 进行 Upsert 智能覆盖)
+func handleCreateCustomRule(c *gin.Context) {
+	var req struct {
+		Type    string `json:"type" binding:"required"`
+		Payload string `json:"payload" binding:"required"`
+		Target  string `json:"target" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+
+	var existingRule CustomRule
+	if err := DB.Where("type = ? AND payload = ?", req.Type, req.Payload).First(&existingRule).Error; err == nil {
+		// 已存在相同的拦截条件，执行覆盖更新
+		existingRule.Target = req.Target
+		if err := DB.Save(&existingRule).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "覆盖更新失败", "error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 200, "message": "规则已覆盖更新", "data": existingRule})
+		return
+	}
+
+	// 不存在，创建新规则
+	rule := CustomRule{
+		Type:    req.Type,
+		Payload: req.Payload,
+		Target:  req.Target,
+	}
+	if err := DB.Create(&rule).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存失败", "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "保存成功", "data": rule})
+}
+
+// handleUpdateCustomRule 更新自定义规则
+func handleUpdateCustomRule(c *gin.Context) {
+	id := c.Param("id")
+	var req struct {
+		Type    string `json:"type" binding:"required"`
+		Payload string `json:"payload" binding:"required"`
+		Target  string `json:"target" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+
+	var rule CustomRule
+	if err := DB.First(&rule, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "规则不存在"})
+		return
+	}
+
+	rule.Type = req.Type
+	rule.Payload = req.Payload
+	rule.Target = req.Target
+
+	if err := DB.Save(&rule).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新失败", "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "更新成功", "data": rule})
+}
+
+// handleDeleteCustomRule 删除自定义规则
+func handleDeleteCustomRule(c *gin.Context) {
+	id := c.Param("id")
+	if err := DB.Delete(&CustomRule{}, id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除失败", "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功"})
+}
+
 // injectCustomNodes 基于 yaml.v3 的 Node 树完成自定义节点的注入
 func injectCustomNodes(yamlContent string) string {
 	var root yaml.Node
@@ -378,12 +474,15 @@ func injectCustomNodes(yamlContent string) string {
 		return yamlContent
 	}
 
-	// 寻找 proxies 节点
+	// 寻找 proxies 节点与 proxy-groups 节点
 	var proxiesNode *yaml.Node
+	var proxyGroupsNode *yaml.Node
 	for i := 0; i < len(docNode.Content); i += 2 {
-		if docNode.Content[i].Value == "proxies" {
+		switch docNode.Content[i].Value {
+		case "proxies":
 			proxiesNode = docNode.Content[i+1]
-			break
+		case "proxy-groups":
+			proxyGroupsNode = docNode.Content[i+1]
 		}
 	}
 
@@ -423,6 +522,27 @@ func injectCustomNodes(yamlContent string) string {
 		if len(tempRoot.Content) > 0 && len(tempRoot.Content[0].Content) > 0 {
 			// 将生成的节点对象注入到 proxiesNode 的最开头，使其显示在最前面
 			proxiesNode.Content = append([]*yaml.Node{tempRoot.Content[0]}, proxiesNode.Content...)
+		}
+
+		// 智能感知：自动将该自定义节点注入到订阅原有的各个代理组的 proxies 列表中
+		// （自定义策略组由于会在后续阶段独立注入，因此此处天然排除了自定义组，符合 KISS 和业务原则）
+		if proxyGroupsNode != nil && proxyGroupsNode.Kind == yaml.SequenceNode {
+			for _, groupNode := range proxyGroupsNode.Content {
+				if groupNode.Kind != yaml.MappingNode {
+					continue
+				}
+				// 寻找组内的 proxies 序列节点
+				for i := 0; i < len(groupNode.Content); i += 2 {
+					if groupNode.Content[i].Value == "proxies" {
+						groupProxiesNode := groupNode.Content[i+1]
+						if groupProxiesNode.Kind == yaml.SequenceNode {
+							// 将自定义节点名优雅地插入到该组代理列表的最前方
+							groupProxiesNode.Content = append([]*yaml.Node{{Kind: yaml.ScalarNode, Value: cn.Name}}, groupProxiesNode.Content...)
+						}
+						break
+					}
+				}
+			}
 		}
 	}
 
@@ -543,6 +663,103 @@ func injectCustomGroups(yamlContent string) string {
 	out, err := yaml.Marshal(&root)
 	if err != nil {
 		log.Printf("YAML marshal warning: %v", err)
+		return yamlContent
+	}
+	return string(out)
+}
+
+// injectCustomRules 基于 yaml.v3 Node 树完成分流规则的强力接管、前置注入与原生去重
+func injectCustomRules(yamlContent string) string {
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(yamlContent), &root); err != nil {
+		log.Printf("YAML unmarshal warning in injectCustomRules: %v", err)
+		return yamlContent
+	}
+
+	if len(root.Content) == 0 {
+		return yamlContent
+	}
+	docNode := root.Content[0]
+	if docNode.Kind != yaml.MappingNode {
+		return yamlContent
+	}
+
+	// 寻找 rules 节点
+	var rulesNode *yaml.Node
+	for i := 0; i < len(docNode.Content); i += 2 {
+		if docNode.Content[i].Value == "rules" {
+			rulesNode = docNode.Content[i+1]
+			break
+		}
+	}
+
+	// 如果没有 rules 节点，创建一个新的
+	if rulesNode == nil {
+		rulesNode = &yaml.Node{Kind: yaml.SequenceNode}
+		docNode.Content = append(docNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "rules"},
+			rulesNode,
+		)
+	} else if rulesNode.Kind != yaml.SequenceNode {
+		return yamlContent
+	}
+
+	// 1. 获取所有自定义规则并建立指纹映射，用于后续原生规则的去重剥离
+	customRules, _ := GetCustomRules()
+	customFingerprints := make(map[string]bool)
+	var customRuleNodes []*yaml.Node
+
+	for _, cr := range customRules {
+		// 生成规则字符串: TYPE,PAYLOAD,TARGET
+		// 若 PAYLOAD 为 "-", 说明这是没有中间 payload 的规则（如 MATCH）
+		var ruleStr string
+		var fingerprint string
+		if cr.Payload == "-" || cr.Payload == "" {
+			ruleStr = fmt.Sprintf("%s,%s", cr.Type, cr.Target)
+			fingerprint = cr.Type
+		} else {
+			ruleStr = fmt.Sprintf("%s,%s,%s", cr.Type, cr.Payload, cr.Target)
+			fingerprint = fmt.Sprintf("%s,%s", cr.Type, cr.Payload)
+		}
+		
+		customFingerprints[fingerprint] = true
+		customRuleNodes = append(customRuleNodes, &yaml.Node{
+			Kind:  yaml.ScalarNode,
+			Value: ruleStr,
+		})
+	}
+
+	// 2. 遍历原有订阅规则，剥离掉与自定义规则指纹冲突的部分（实现覆盖）
+	var filteredOriginalRules []*yaml.Node
+	for _, rn := range rulesNode.Content {
+		// 解析原生规则指纹
+		parts := strings.Split(rn.Value, ",")
+		if len(parts) >= 1 {
+			var fingerprint string
+			if len(parts) >= 3 {
+				fingerprint = fmt.Sprintf("%s,%s", parts[0], parts[1])
+			} else if len(parts) == 2 {
+				// MATCH,Proxy
+				fingerprint = parts[0]
+			} else {
+				fingerprint = rn.Value
+			}
+
+			// 如果该原生指纹在自定义规则中已存在，则抛弃（跳过），完成覆盖逻辑
+			if customFingerprints[fingerprint] {
+				continue
+			}
+		}
+		filteredOriginalRules = append(filteredOriginalRules, rn)
+	}
+
+	// 3. 强行接管：将自定义规则永远排在原生规则的最前面（享有最高处理优先级）
+	rulesNode.Content = append(customRuleNodes, filteredOriginalRules...)
+
+	// 转回 YAML 字符串
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		log.Printf("YAML marshal warning in injectCustomRules: %v", err)
 		return yamlContent
 	}
 	return string(out)
@@ -786,9 +1003,10 @@ func autoPruneDialerProxyLoops(proxiesNode, proxyGroupsNode *yaml.Node) {
 		for i := 0; i < len(proxyNode.Content); i += 2 {
 			key := proxyNode.Content[i].Value
 			valNode := proxyNode.Content[i+1]
-			if key == "name" {
+			switch key {
+			case "name":
 				name = valNode.Value
-			} else if key == "dialer-proxy" {
+			case "dialer-proxy":
 				dialerProxy = valNode.Value
 			}
 		}
@@ -807,9 +1025,10 @@ func autoPruneDialerProxyLoops(proxiesNode, proxyGroupsNode *yaml.Node) {
 		for i := 0; i < len(groupNode.Content); i += 2 {
 			key := groupNode.Content[i].Value
 			valNode := groupNode.Content[i+1]
-			if key == "name" {
+			switch key {
+			case "name":
 				groupName = valNode.Value
-			} else if key == "proxies" {
+			case "proxies":
 				proxiesSeq = valNode
 			}
 		}

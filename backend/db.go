@@ -42,6 +42,14 @@ type CustomNode struct {
 	CreatedAt int64  `gorm:"autoCreateTime"`
 }
 
+type CustomRule struct {
+	ID        uint   `gorm:"primarykey"`
+	Type      string `gorm:"uniqueIndex:idx_type_payload;not null"` // 如 DOMAIN-SUFFIX
+	Payload   string `gorm:"uniqueIndex:idx_type_payload;not null"` // 如 google.com
+	Target    string `gorm:"not null"`                              // 如 PROXY
+	CreatedAt int64  `gorm:"autoCreateTime"`
+}
+
 var DB *gorm.DB
 
 func initDB() {
@@ -74,7 +82,7 @@ func initDB() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	err = db.AutoMigrate(&CustomProxyGroup{}, &CustomNode{})
+	err = db.AutoMigrate(&CustomProxyGroup{}, &CustomNode{}, &CustomRule{})
 	if err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
@@ -104,4 +112,11 @@ func GetCustomNodes() ([]CustomNode, error) {
 	var nodes []CustomNode
 	err := DB.Find(&nodes).Error
 	return nodes, err
+}
+
+// GetCustomRules returns all custom routing rules
+func GetCustomRules() ([]CustomRule, error) {
+	var rules []CustomRule
+	err := DB.Find(&rules).Error
+	return rules, err
 }

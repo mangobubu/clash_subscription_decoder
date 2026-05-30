@@ -30,12 +30,14 @@ const result = ref<{ url: string; raw_base64: string; decoded: string } | null>(
 // ---------------------- 自定义资源字典状态 ----------------------
 const customNodesDict = ref<Record<string, any>>({});
 const customGroupsDict = ref<Record<string, any>>({});
+const customRulesDict = ref<Record<string, any>>({});
 
 const fetchCustomData = async () => {
   try {
-    const [nodesRes, groupsRes] = await Promise.all([
+    const [nodesRes, groupsRes, rulesRes] = await Promise.all([
       axios.get("http://localhost:8080/api/custom-nodes"),
       axios.get("http://localhost:8080/api/custom-groups"),
+      axios.get("http://localhost:8080/api/custom-rules"),
     ]);
     const nDict: Record<string, any> = {};
     if (nodesRes.data.code === 200) {
@@ -48,6 +50,20 @@ const fetchCustomData = async () => {
       groupsRes.data.data.forEach((g: any) => (gDict[g.Name || g.name] = g));
     }
     customGroupsDict.value = gDict;
+
+    const rDict: Record<string, any> = {};
+    if (rulesRes.data.code === 200) {
+      rulesRes.data.data.forEach((r: any) => {
+        let key = "";
+        if (!r.Payload || r.Payload === "-") {
+          key = r.Type;
+        } else {
+          key = `${r.Type},${r.Payload}`;
+        }
+        rDict[key] = r;
+      });
+    }
+    customRulesDict.value = rDict;
   } catch (e) {
     console.error("获取自定义数据失败", e);
   }
@@ -616,11 +632,187 @@ const saveCustomNode = async () => {
     }
   } catch (error: any) {
     ElMessage.error(
-      "保存失败: " + (error.response?.data?.message || error.message),
+      "保存失败: " + (error.response?.data?.message || error.message)
     );
   } finally {
     isSubmittingNode.value = false;
   }
+};
+
+const dirtyRulesMap = ref<Record<string, any>>({});
+const hasDirtyRules = computed(() => Object.keys(dirtyRulesMap.value).length > 0);
+
+const markRuleDirty = (row: any) => {
+  let key = row.payload === "-" ? row.type : `${row.type},${row.payload}`;
+  dirtyRulesMap.value[key] = row;
+};
+
+const batchSaveRules = async () => {
+  if (!hasDirtyRules.value) return;
+  isSubmittingRule.value = true;
+  
+  try {
+    const promises = Object.values(dirtyRulesMap.value).map((row: any) => {
+      let key = row.payload === "-" ? row.type : `${row.type},${row.payload}`;
+      let customInfo = customRulesDict.value[key];
+      let submitData = {
+        type: row.type,
+        payload: row.payload === "-" ? "-" : row.payload,
+        target: row.target,
+      };
+      if (customInfo) {
+        return axios.put(`http://localhost:8080/api/custom-rules/${customInfo.ID}`, submitData);
+      } else {
+        return axios.post("http://localhost:8080/api/custom-rules", submitData);
+      }
+    });
+
+    await Promise.all(promises);
+    ElMessage.success(`成功批量接管 ${promises.length} 条策略！正在重新拉取订阅...`);
+    dirtyRulesMap.value = {};
+    await fetchCustomData();
+    if (inputUrl.value) {
+      await handleDecode();
+    }
+  } catch (error: any) {
+    ElMessage.error("部分策略保存失败: " + (error.response?.data?.message || error.message));
+  } finally {
+    isSubmittingRule.value = false;
+  }
+};
+
+// ---------------------- 自定义规则管理逻辑 ----------------------
+const ruleDialogVisible = ref(false);
+const isSubmittingRule = ref(false);
+const editingRuleId = ref<number | null>(null);
+
+const newRuleForm = ref({
+  type: "DOMAIN-SUFFIX",
+  payload: "",
+  target: "PROXY",
+});
+
+const ruleTypes = [
+  "DOMAIN-SUFFIX",
+  "DOMAIN-KEYWORD",
+  "DOMAIN",
+  "IP-CIDR",
+  "IP-CIDR6",
+  "GEOIP",
+  "MATCH",
+  "PROCESS-NAME",
+];
+
+const openRuleDialog = () => {
+  editingRuleId.value = null;
+  newRuleForm.value = { type: "DOMAIN-SUFFIX", payload: "", target: "PROXY" };
+  ruleDialogVisible.value = true;
+};
+
+const editRule = (row: any) => {
+  let key = row.payload === "-" ? row.type : `${row.type},${row.payload}`;
+  let customInfo = customRulesDict.value[key];
+
+  if (customInfo) {
+    editingRuleId.value = customInfo.ID;
+    newRuleForm.value = {
+      type: customInfo.Type,
+      payload: customInfo.Payload === "-" ? "" : customInfo.Payload,
+      target: customInfo.Target,
+    };
+  } else {
+    editingRuleId.value = null; // 接管原生规则
+    newRuleForm.value = {
+      type: row.type,
+      payload: row.payload === "-" ? "" : row.payload,
+      target: row.target,
+    };
+  }
+  ruleDialogVisible.value = true;
+};
+
+const deleteCustomRule = (row: any) => {
+  let key = row.payload === "-" ? row.type : `${row.type},${row.payload}`;
+  let customInfo = customRulesDict.value[key];
+  if (!customInfo) return;
+
+  ElMessageBox.confirm(`确定要移除对该规则的接管并恢复原生状态吗？`, "安全提示", {
+    confirmButtonText: "确认移除",
+    cancelButtonText: "取消",
+    type: "warning",
+  })
+    .then(async () => {
+      try {
+        const res = await axios.delete(
+          `http://localhost:8080/api/custom-rules/${customInfo.ID}`
+        );
+        if (res.data.code === 200) {
+          ElMessage.success("自定义分流规则已成功移除！");
+          await fetchCustomData();
+          if (inputUrl.value) {
+            await handleDecode();
+          }
+        }
+      } catch (err: any) {
+        ElMessage.error("移除失败: " + err.message);
+      }
+    })
+    .catch(() => {});
+};
+
+const saveCustomRule = async () => {
+  if (!newRuleForm.value.type || !newRuleForm.value.target) {
+    ElMessage.warning("请补全规则类型和目标策略");
+    return;
+  }
+  if (newRuleForm.value.type !== "MATCH" && !newRuleForm.value.payload) {
+    ElMessage.warning("请输入匹配内容 (Payload)");
+    return;
+  }
+
+  let submitData = { ...newRuleForm.value };
+  if (!submitData.payload) {
+    submitData.payload = "-";
+  }
+
+  isSubmittingRule.value = true;
+  try {
+    let res;
+    if (editingRuleId.value) {
+      res = await axios.put(
+        `http://localhost:8080/api/custom-rules/${editingRuleId.value}`,
+        submitData
+      );
+    } else {
+      res = await axios.post(
+        "http://localhost:8080/api/custom-rules",
+        submitData
+      );
+    }
+    if (res.data.code === 200) {
+      ElMessage.success(
+        editingRuleId.value ? "规则更新成功！" : "规则已云端接管生效！"
+      );
+      ruleDialogVisible.value = false;
+      await fetchCustomData();
+      if (inputUrl.value) {
+        await handleDecode();
+      }
+    } else {
+      throw new Error(res.data.message);
+    }
+  } catch (error: any) {
+    ElMessage.error(
+      "保存失败: " + (error.response?.data?.message || error.message)
+    );
+  } finally {
+    isSubmittingRule.value = false;
+  }
+};
+
+const isCustomRule = (row: any) => {
+  let key = row.payload === "-" ? row.type : `${row.type},${row.payload}`;
+  return !!customRulesDict.value[key];
 };
 </script>
 
@@ -980,6 +1172,25 @@ const saveCustomNode = async () => {
                       <span style="font-size: 16px">🔍</span>
                     </template>
                   </el-input>
+                  <el-button
+                    v-if="hasDirtyRules"
+                    type="success"
+                    effect="dark"
+                    round
+                    :loading="isSubmittingRule"
+                    @click="batchSaveRules"
+                  >
+                    💾 批量应用修改 ({{ Object.keys(dirtyRulesMap).length }})
+                  </el-button>
+                  <el-button
+                    type="primary"
+                    effect="dark"
+                    round
+                    @click="openRuleDialog"
+                  >
+                    <span style="margin-right: 4px; font-weight: bold">+</span>
+                    新增自定义规则
+                  </el-button>
                 </div>
 
                 <el-table
@@ -1008,15 +1219,67 @@ const saveCustomNode = async () => {
                       <span class="rule-payload">{{ scope.row.payload }}</span>
                     </template>
                   </el-table-column>
-                  <el-table-column prop="target" label="目标策略" width="220">
+                  <el-table-column prop="target" label="目标策略" width="280">
                     <template #default="scope">
-                      <el-tag
-                        size="small"
-                        effect="plain"
-                        type="success"
-                        class="rule-target-tag"
-                        >{{ scope.row.target }}</el-tag
-                      >
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <el-select
+                          v-model="scope.row.target"
+                          size="small"
+                          filterable
+                          allow-create
+                          default-first-option
+                          style="width: 170px"
+                          popper-class="glass-dropdown"
+                          @change="markRuleDirty(scope.row)"
+                        >
+                          <el-option label="DIRECT (直连)" value="DIRECT" />
+                          <el-option label="REJECT (拒绝)" value="REJECT" />
+                          <el-option label="PROXY (默认代理)" value="PROXY" />
+                          <el-option-group label="现有策略组">
+                            <el-option
+                              v-for="g in proxyGroups"
+                              :key="g.name"
+                              :label="g.name"
+                              :value="g.name"
+                            />
+                          </el-option-group>
+                          <el-option-group label="现有独立节点">
+                            <el-option
+                              v-for="n in parsedNodes"
+                              :key="n.name"
+                              :label="n.name"
+                              :value="n.name"
+                            />
+                          </el-option-group>
+                        </el-select>
+                        <el-tag
+                          v-if="isCustomRule(scope.row)"
+                          size="small"
+                          type="danger"
+                          effect="dark"
+                        >已覆盖 (云端)</el-tag>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="120" fixed="right">
+                    <template #default="scope">
+                      <div style="display: flex; gap: 4px">
+                        <el-button
+                          type="primary"
+                          link
+                          :icon="Edit"
+                          @click="editRule(scope.row)"
+                          :title="isCustomRule(scope.row) ? '高级编辑' : '高级编辑并接管'"
+                        ></el-button>
+                        <el-button
+                          v-if="isCustomRule(scope.row)"
+                          type="danger"
+                          link
+                          :icon="Delete"
+                          @click="deleteCustomRule(scope.row)"
+                          title="移除接管 (恢复原生)"
+                        ></el-button>
+                      </div>
                     </template>
                   </el-table-column>
                 </el-table>
@@ -1344,6 +1607,69 @@ const saveCustomNode = async () => {
           </div>
         </el-tab-pane>
       </el-tabs>
+    </el-dialog>
+
+    <!-- 自定义规则弹窗 -->
+    <el-dialog
+      v-model="ruleDialogVisible"
+      :title="editingRuleId ? '✏️ 编辑云端自定义规则' : '✏️ 新增 / 接管分流规则'"
+      width="550px"
+      class="glass-dialog"
+    >
+      <el-form label-position="top">
+        <el-form-item label="规则类型 (Type)">
+          <el-select v-model="newRuleForm.type" filterable allow-create default-first-option style="width: 100%" popper-class="glass-dropdown">
+            <el-option v-for="t in ruleTypes" :key="t" :label="t" :value="t" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="匹配内容 (Payload) - MATCH 可留空">
+          <el-input
+            v-model="newRuleForm.payload"
+            placeholder="例如：google.com"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="目标策略 (Target)">
+          <el-select
+            v-model="newRuleForm.target"
+            filterable
+            allow-create
+            default-first-option
+            placeholder="请选择或输入目标策略"
+            style="width: 100%"
+            popper-class="glass-dropdown"
+          >
+            <el-option label="DIRECT (直连)" value="DIRECT" />
+            <el-option label="REJECT (拒绝)" value="REJECT" />
+            <el-option label="PROXY (默认代理)" value="PROXY" />
+            <el-option-group label="现有策略组">
+              <el-option
+                v-for="g in proxyGroups"
+                :key="g.name"
+                :label="g.name"
+                :value="g.name"
+              />
+            </el-option-group>
+            <el-option-group label="现有独立节点">
+              <el-option
+                v-for="n in parsedNodes"
+                :key="n.name"
+                :label="n.name"
+                :value="n.name"
+              />
+            </el-option-group>
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="ruleDialogVisible = false" plain>取消</el-button>
+        <el-button
+          type="primary"
+          @click="saveCustomRule"
+          :loading="isSubmittingRule"
+        >
+          {{ editingRuleId ? "更新并立即云端同步" : "保存并立即覆盖同步" }}
+        </el-button>
+      </template>
     </el-dialog>
 
     <!-- 页脚版权说明 -->
