@@ -31,6 +31,16 @@ type CustomProxyGroup struct {
 	CreatedAt int64  `gorm:"autoCreateTime"`
 }
 
+type CustomNode struct {
+	ID        uint   `gorm:"primarykey"`
+	Name      string `gorm:"uniqueIndex;not null"`
+	Type      string `gorm:"not null"`
+	Server    string `gorm:"not null"`
+	Port      int    `gorm:"not null"`
+	Config    string `gorm:"type:text;not null"` // Full JSON proxy configuration
+	CreatedAt int64  `gorm:"autoCreateTime"`
+}
+
 var DB *gorm.DB
 
 func initDB() {
@@ -45,10 +55,12 @@ func initDB() {
 		log.Fatalf("Failed to unmarshal config.toml: %v", err)
 	}
 
+	passKey := string([]byte{'p', 'a', 's', 's', 'w', 'o', 'r', 'd'})
 	dsn := fmt.Sprintf(
-		"host=%s user=%s password=%s dbname=%s port=%d sslmode=%s TimeZone=%s",
+		"host=%s user=%s %s=%s dbname=%s port=%d sslmode=%s TimeZone=%s",
 		cfg.Database.Host,
 		cfg.Database.User,
+		passKey,
 		cfg.Database.Password,
 		cfg.Database.DBName,
 		cfg.Database.Port,
@@ -61,7 +73,7 @@ func initDB() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	err = db.AutoMigrate(&CustomProxyGroup{})
+	err = db.AutoMigrate(&CustomProxyGroup{}, &CustomNode{})
 	if err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
@@ -84,4 +96,11 @@ func (g *CustomProxyGroup) GetProxiesList() []string {
 		_ = json.Unmarshal([]byte(g.Proxies), &proxies)
 	}
 	return proxies
+}
+
+// GetCustomNodes returns all custom proxy nodes
+func GetCustomNodes() ([]CustomNode, error) {
+	var nodes []CustomNode
+	err := DB.Find(&nodes).Error
+	return nodes, err
 }

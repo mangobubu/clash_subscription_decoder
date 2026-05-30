@@ -271,7 +271,6 @@ const saveCustomGroup = async () => {
     if (res.data.code === 200) {
       ElMessage.success('自定义组已云端保存成功！')
       groupDialogVisible.value = false
-      // 保存成功后若已有订阅文本，直接触发再次请求来触发 AST 注入
       if (inputUrl.value) {
         await handleDecode()
       }
@@ -282,6 +281,102 @@ const saveCustomGroup = async () => {
     ElMessage.error('保存失败: ' + (error.response?.data?.message || error.message))
   } finally {
     isSubmittingGroup.value = false
+  }
+}
+
+// ---------------------- 自定义节点管理逻辑 ----------------------
+const nodeDialogVisible = ref(false)
+const nodeActiveTab = ref('link')
+const isParsingLink = ref(false)
+const isSubmittingNode = ref(false)
+
+const nodeLinkForm = ref({
+  link: ''
+})
+
+const newNodeForm = ref({
+  name: '',
+  type: 'vless',
+  server: '',
+  port: 443,
+  config: {} as Record<string, any>
+})
+
+const nodeTypes = ['vless', 'hysteria2', 'ss', 'vmess', 'trojan']
+
+const configString = computed({
+  get: () => JSON.stringify(newNodeForm.value.config, null, 2),
+  set: (val: string) => {
+    try {
+      newNodeForm.value.config = JSON.parse(val)
+    } catch(e) {
+      // ignore
+    }
+  }
+})
+
+const openNodeDialog = () => {
+  nodeLinkForm.value.link = ''
+  newNodeForm.value = { name: '', type: 'vless', server: '', port: 443, config: {} }
+  nodeDialogVisible.value = true
+  nodeActiveTab.value = 'link'
+}
+
+const parseNodeLink = async () => {
+  if (!nodeLinkForm.value.link) {
+    ElMessage.warning('请输入节点链接')
+    return
+  }
+  isParsingLink.value = true
+  try {
+    const res = await axios.post('http://localhost:8080/api/parse-link', { link: nodeLinkForm.value.link })
+    if (res.data.code === 200) {
+      const data = res.data.data
+      newNodeForm.value.name = data.name || ''
+      newNodeForm.value.type = data.type || 'vless'
+      newNodeForm.value.server = data.server || ''
+      newNodeForm.value.port = data.port || 443
+      newNodeForm.value.config = data.config || {}
+      ElMessage.success('链接解析成功！请在右侧检查参数')
+      nodeActiveTab.value = 'manual'
+    } else {
+      throw new Error(res.data.message)
+    }
+  } catch (error: any) {
+    ElMessage.error('解析失败: ' + (error.response?.data?.message || error.message))
+  } finally {
+    isParsingLink.value = false
+  }
+}
+
+const saveCustomNode = async () => {
+  if (!newNodeForm.value.name || !newNodeForm.value.server || !newNodeForm.value.port) {
+    ElMessage.warning('请补全基础信息（名称、服务器、端口）')
+    return
+  }
+  isSubmittingNode.value = true
+  
+  // 同步基础信息到 config
+  newNodeForm.value.config.name = newNodeForm.value.name
+  newNodeForm.value.config.type = newNodeForm.value.type
+  newNodeForm.value.config.server = newNodeForm.value.server
+  newNodeForm.value.config.port = newNodeForm.value.port
+
+  try {
+    const res = await axios.post('http://localhost:8080/api/custom-nodes', newNodeForm.value)
+    if (res.data.code === 200) {
+      ElMessage.success('自定义节点云端保存成功！')
+      nodeDialogVisible.value = false
+      if (inputUrl.value) {
+        await handleDecode()
+      }
+    } else {
+      throw new Error(res.data.message)
+    }
+  } catch (error: any) {
+    ElMessage.error('保存失败: ' + (error.response?.data?.message || error.message))
+  } finally {
+    isSubmittingNode.value = false
   }
 }
 </script>
@@ -401,6 +496,11 @@ const saveCustomGroup = async () => {
               <template #label>
                 <span class="tab-label">⚡ 节点解析概览 ({{ parsedNodes.length }})</span>
               </template>
+              <div class="nodes-header-actions" style="display:flex; justify-content:flex-end; margin-bottom: 16px;">
+                <el-button type="success" effect="dark" round @click="openNodeDialog">
+                  <span style="margin-right: 4px; font-weight: bold;">+</span> ✨ 新增自定义节点
+                </el-button>
+              </div>
               <div class="nodes-grid">
                 <div v-for="(node, idx) in parsedNodes" :key="idx" class="node-card">
                   <div class="node-card-header">
@@ -598,6 +698,71 @@ const saveCustomGroup = async () => {
           保存并立即云端同步
         </el-button>
       </template>
+    </el-dialog>
+
+    <!-- 自定义节点弹窗 -->
+    <el-dialog 
+      v-model="nodeDialogVisible" 
+      title="✨ 新增云端自定义节点" 
+      width="600px" 
+      class="glass-dialog"
+    >
+      <el-tabs v-model="nodeActiveTab" class="custom-tabs node-dialog-tabs">
+        <el-tab-pane label="🔗 链接智能导入" name="link">
+          <div style="padding: 10px 0;">
+            <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 14px;">
+              支持自动解析 vless://, hysteria2://, ss:// 等分享链接，一键提取核心参数。
+            </p>
+            <el-input 
+              v-model="nodeLinkForm.link" 
+              type="textarea" 
+              :rows="4" 
+              placeholder="请粘贴您的节点链接..."
+            ></el-input>
+            <div style="margin-top: 15px; text-align: right;">
+              <el-button type="primary" @click="parseNodeLink" :loading="isParsingLink">一键解析链接</el-button>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="✍️ 手动配置调整" name="manual">
+          <el-form label-position="left" label-width="80px" style="padding: 10px 0; max-height: 400px; overflow-y: auto;">
+            <el-form-item label="节点名称">
+              <el-input v-model="newNodeForm.name" placeholder="请输入节点显示的名称"></el-input>
+            </el-form-item>
+            <el-form-item label="协议类型">
+              <el-select v-model="newNodeForm.type" style="width: 100%">
+                <el-option v-for="t in nodeTypes" :key="t" :label="t.toUpperCase()" :value="t" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="服务器">
+              <el-input v-model="newNodeForm.server" placeholder="例如：example.com 或 IP"></el-input>
+            </el-form-item>
+            <el-form-item label="端口">
+              <el-input-number v-model="newNodeForm.port" :min="1" :max="65535" style="width: 100%"></el-input-number>
+            </el-form-item>
+            <el-form-item label="详细配置">
+              <p style="font-size: 12px; color: var(--text-secondary); margin-top: 0; line-height: 1.4;">
+                高级参数（如 uuid, tls, network 等），将作为 JSON 对象合并到该节点配置中。<br/>
+                解析链接后，这里会预先填充。如需手动输入格式请使用合法的 JSON。
+              </p>
+              <codemirror
+                v-model="configString"
+                :extensions="cmExtensions"
+                :style="{ width: '100%', maxHeight: '200px', fontSize: '13px', borderRadius: '8px' }"
+                :indent-with-tab="true"
+                :tab-size="2"
+              />
+            </el-form-item>
+          </el-form>
+          <div style="margin-top: 20px; text-align: right;">
+            <el-button @click="nodeDialogVisible = false" plain>取消</el-button>
+            <el-button type="success" @click="saveCustomNode" :loading="isSubmittingNode">
+              确认并存入云端
+            </el-button>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </el-dialog>
 
     <!-- 页脚版权说明 -->

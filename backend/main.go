@@ -42,6 +42,14 @@ func main() {
 	// 注册解码接口
 	r.POST("/api/decode", handleDecode)
 	
+	// 注册解析节点链接接口
+	r.POST("/api/parse-link", handleParseLink)
+
+	// 注册自定义节点 CRUD 接口
+	r.GET("/api/custom-nodes", handleGetCustomNodes)
+	r.POST("/api/custom-nodes", handleCreateCustomNode)
+	r.DELETE("/api/custom-nodes/:id", handleDeleteCustomNode)
+
 	// 注册自定义组 CRUD 接口
 	r.GET("/api/custom-groups", handleGetCustomGroups)
 	r.POST("/api/custom-groups", handleCreateCustomGroup)
@@ -149,6 +157,9 @@ func handleDecode(c *gin.Context) {
 	}
 	decodedContent = strings.Join(lines, "\n")
 	
+	// 🌟 AST 无损注入逻辑：自动将数据库中的自定义节点注入到 proxies 中
+	decodedContent = injectCustomNodes(decodedContent)
+
 	// 🌟 AST 无损注入逻辑：自动将数据库中的自定义组注入到配置的 proxy-groups 中
 	decodedContent = injectCustomGroups(decodedContent)
 
@@ -197,6 +208,147 @@ func handleCreateCustomGroup(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "保存成功", "data": group})
+}
+
+// handleParseLink 处理节点链接解析
+func handleParseLink(c *gin.Context) {
+	var req struct {
+		Link string `json:"link" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "缺少 link 参数"})
+		return
+	}
+
+	result, err := ParseProxyLink(req.Link)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "解析失败: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "解析成功", "data": result})
+}
+
+// handleGetCustomNodes 获取所有自定义节点
+func handleGetCustomNodes(c *gin.Context) {
+	nodes, err := GetCustomNodes()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": nodes})
+}
+
+// handleCreateCustomNode 创建或保存自定义节点
+func handleCreateCustomNode(c *gin.Context) {
+	var req struct {
+		Name   string                 `json:"name"`
+		Type   string                 `json:"type"`
+		Server string                 `json:"server"`
+		Port   int                    `json:"port"`
+		Config map[string]interface{} `json:"config"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+
+	configBytes, _ := json.Marshal(req.Config)
+	node := CustomNode{
+		Name:   req.Name,
+		Type:   req.Type,
+		Server: req.Server,
+		Port:   req.Port,
+		Config: string(configBytes),
+	}
+	if err := DB.Create(&node).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存失败", "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "保存成功", "data": node})
+}
+
+// handleDeleteCustomNode 删除自定义节点
+func handleDeleteCustomNode(c *gin.Context) {
+	id := c.Param("id")
+	if err := DB.Delete(&CustomNode{}, id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除失败", "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功"})
+}
+
+// injectCustomNodes 基于 yaml.v3 的 Node 树完成自定义节点的注入
+func injectCustomNodes(yamlContent string) string {
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(yamlContent), &root); err != nil {
+		log.Printf("YAML unmarshal warning in injectCustomNodes: %v", err)
+		return yamlContent
+	}
+
+	if len(root.Content) == 0 {
+		return yamlContent
+	}
+	docNode := root.Content[0]
+	if docNode.Kind != yaml.MappingNode {
+		return yamlContent
+	}
+
+	// 寻找 proxies 节点
+	var proxiesNode *yaml.Node
+	for i := 0; i < len(docNode.Content); i += 2 {
+		if docNode.Content[i].Value == "proxies" {
+			proxiesNode = docNode.Content[i+1]
+			break
+		}
+	}
+
+	// 如果没有 proxies 节点，创建一个新的并加入 docNode
+	if proxiesNode == nil {
+		proxiesNode = &yaml.Node{Kind: yaml.SequenceNode}
+		docNode.Content = append(docNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "proxies"},
+			proxiesNode,
+		)
+	} else if proxiesNode.Kind != yaml.SequenceNode {
+		return yamlContent
+	}
+
+	// 获取数据库里的自定义节点并无损注入
+	customNodes, _ := GetCustomNodes()
+	for _, cn := range customNodes {
+		var configMap map[string]interface{}
+		if err := json.Unmarshal([]byte(cn.Config), &configMap); err != nil {
+			log.Printf("Failed to unmarshal custom node config: %v", err)
+			continue
+		}
+
+		// 将 configMap 转换回 YAML 节点
+		configYAML, err := yaml.Marshal(configMap)
+		if err != nil {
+			log.Printf("Failed to marshal config back to yaml: %v", err)
+			continue
+		}
+
+		var tempRoot yaml.Node
+		if err := yaml.Unmarshal(configYAML, &tempRoot); err != nil {
+			log.Printf("Failed to unmarshal temp config back to node: %v", err)
+			continue
+		}
+		
+		if len(tempRoot.Content) > 0 && len(tempRoot.Content[0].Content) > 0 {
+			// 将生成的节点对象注入到 proxiesNode 的最开头，使其显示在最前面
+			proxiesNode.Content = append([]*yaml.Node{tempRoot.Content[0]}, proxiesNode.Content...)
+		}
+	}
+
+	// 转回 YAML 字符串
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		log.Printf("YAML marshal warning in injectCustomNodes: %v", err)
+		return yamlContent
+	}
+	return string(out)
 }
 
 // injectCustomGroups 基于 yaml.v3 的 Node 树完成零注释丢失的无损注入
