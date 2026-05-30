@@ -32,10 +32,10 @@ RUN apt-get update && \
 WORKDIR /app
 
 # 从构建阶段拷贝编译好的包含全量前端的独立全栈二进制程序
-COPY --from=builder /app/release/clash-proxy /app/clash-proxy
+COPY --from=builder /app/release/ClashSubAST /app/ClashSubAST
 
 # 暴露后端监听端口
 EXPOSE 8080
 
 # 启动全栈应用 (运行目录中需挂载或提供 config.toml)
-CMD ["/app/clash-proxy"]
+CMD ["/app/ClashSubAST"]

@@ -1,4 +1,4 @@
-# Clash Proxy 订阅定制与安全动态分发平台
+# ClashSubAST 订阅定制与安全动态分发平台
 
 <p align="center">
   <img src="https://img.shields.io/badge/Go-1.20%2B-00ADD8?style=flat-square&logo=go" alt="Go Version">
@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License">
 </p>
 
-`clash-proxy` 是一个专为 Clash/Mihomo 客户端量身定制的**订阅解析、自定义合并与安全动态分发平台**。
+`ClashSubAST` 是一个专为 Clash/Mihomo 客户端量身定制的**订阅解析、自定义合并与安全动态分发平台**。
 
 传统的在线订阅转换服务存在巨大的隐私泄漏隐患，且无法持久化保存个性化配置。本项目旨在提供一个**私有化部署、安全可控、无损动态合成**的终极解决方案。
 
@@ -146,15 +146,15 @@ go run build.go
 构建成功后，您仅需将项目根目录下的 **`release`** 目录整体拷走即可部署。它的结构如下：
 ```text
 release/
-├── clash-proxy         # 内置了全量前端的独立全栈二进制程序 (Windows 下为 clash-proxy.exe)
+├── ClashSubAST         # 内置了全量前端的独立全栈二进制程序 (Windows 下为 ClashSubAST.exe)
 ├── config.toml         # 自动生成的初始运行配置文件 (自动保护，二次构建不会覆盖您的修改)
 └── config.example.toml # 配置模板备份
 ```
 进入该目录并直接启动程序即可拉起完整服务：
 ```bash
 cd release
-# 运行全栈服务 (Windows 环境下文件名为 ./clash-proxy.exe)
-./clash-proxy
+# 运行全栈服务 (Windows 环境下文件名为 ./ClashSubAST.exe)
+./ClashSubAST
 ```
 运行后，访问 `http://localhost:8080` 即可直接开始使用完整的前端管理界面与后端 API 服务，真正实现“拷走即用”！
 
@@ -181,7 +181,7 @@ cd release
 
 如果您希望在生产环境中利用 Docker 进行轻量化一键部署与管理，项目已内置了高水准的容器化支持：
 - **多阶段构建 Dockerfile**：编译环境与生产运行环境物理隔离，最终生成的生产镜像仅约为 50MB。
-- **一键容器编排**：联调拉起 Clash Proxy 主服务与持久化的 PostgreSQL 数据库，内置数据库健康检查与服务依赖。
+- **一键容器编排**：联调拉起 ClashSubAST 主服务与持久化的 PostgreSQL 数据库，内置数据库健康检查与服务依赖。
 
 ### 1. 快速一键拉起
 在安装了 Docker 及 Docker Compose 的服务器上，仅需执行以下两步即可完成全栈极速部署：
@@ -208,7 +208,7 @@ docker compose down
 
 ### 3. 数据备份与配置文件维护
 * **配置文件更新**：您可以直接在宿主机修改根目录下的 `config.toml` 文件，修改后运行 `docker compose restart app` 重启应用容器即可使最新配置生效。
-* **数据库持久化**：数据库的数据会被安全地保存在 Docker Named Volume `clash-proxy-pgdata` 中，即使容器群被完全删除重建，您的数据依然完好无损。
+* **数据库持久化**：数据库的数据会被安全地保存在 Docker Named Volume `clash-sub-ast-pgdata` 中，即使容器群被完全删除重建，您的数据依然完好无损。
 
 ---
 

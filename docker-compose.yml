@@ -2,13 +2,13 @@ version: '3.8'
 
 services:
   # =========================================================
-  # Clash Proxy 全栈应用服务
+  # ClashSubAST 全栈应用服务
   # =========================================================
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: clash-proxy-app
+    container_name: clash-sub-ast-app
     ports:
       - "8080:8080"
     volumes:
@@ -24,7 +24,7 @@ services:
   # =========================================================
   db:
     image: postgres:15-alpine
-    container_name: clash-proxy-db
+    container_name: clash-sub-ast-db
     environment:
       POSTGRES_USER: clash_proxy_user
       POSTGRES_PASSWORD: secure_db_password_9988
@@ -43,4 +43,4 @@ services:
 
 volumes:
   pgdata:
-    name: clash-proxy-pgdata
+    name: clash-sub-ast-pgdata

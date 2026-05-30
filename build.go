@@ -11,7 +11,7 @@ import (
 
 func main() {
 	fmt.Println("==================================================")
-	fmt.Println("       Clash Proxy 全栈一键自动化构建系统")
+	fmt.Println("       ClashSubAST 全栈一键自动化构建系统")
 	fmt.Println("==================================================")
 
 	// 1. 确定项目目录结构
@@ -68,9 +68,9 @@ func main() {
 	fmt.Printf("✅ 前端打包并直出至 backend/dist 成功！\n\n")
 
 	// 5. 执行后端 Go 二进制编译并输出到 release 目录
-	binaryName := "clash-proxy"
+	binaryName := "ClashSubAST"
 	if runtime.GOOS == "windows" {
-		binaryName = "clash-proxy.exe"
+		binaryName = "ClashSubAST.exe"
 	}
 	binaryPath := filepath.Join(releaseDir, binaryName)
 	fmt.Printf("🔨 正在编译 Go 后端应用，并汇聚至 release/%s...\n", binaryName)

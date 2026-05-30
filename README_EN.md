@@ -1,4 +1,4 @@
-# Clash Proxy - Subscription Customization & Secure Dynamic Distribution Platform
+# ClashSubAST - Subscription Customization & Secure Dynamic Distribution Platform
 
 <p align="center">
   <img src="https://img.shields.io/badge/Go-1.20%2B-00ADD8?style=flat-square&logo=go" alt="Go Version">
@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License">
 </p>
 
-`clash-proxy` is a specialized **subscription parsing, custom merging, and secure dynamic distribution platform** designed specifically for Clash/Mihomo clients.
+`ClashSubAST` is a specialized **subscription parsing, custom merging, and secure dynamic distribution platform** designed specifically for Clash/Mihomo clients.
 
 Traditional online subscription conversion services pose severe privacy leakage risks and lack the capability to save personalized configurations persistently. This project aims to offer a **privately deployed, secure, and losslessly dynamically synthesized** ultimate solution.
 
@@ -146,15 +146,15 @@ The build system will automatically discover your local package manager (priorit
 Upon successful compilation, you only need to copy the **`release`** folder to your production server. The folder layout is structured as follows:
 ```text
 release/
-├── clash-proxy         # Standalone executable with embedded frontend (clash-proxy.exe on Windows)
+├── ClashSubAST         # Standalone executable with embedded frontend (ClashSubAST.exe on Windows)
 ├── config.toml         # Generated initial configuration file (protected, subsequent builds will not overwrite your edits)
 └── config.example.toml # Backup configuration template
 ```
 Navigate to the directory and run the executable to launch the full-stack server instantly:
 ```bash
 cd release
-# Run the full-stack server (filename will be ./clash-proxy.exe on Windows)
-./clash-proxy
+# Run the full-stack server (filename will be ./ClashSubAST.exe on Windows)
+./ClashSubAST
 ```
 Once started, visit `http://localhost:8080` in your browser to access both the administrative web interface and the background APIs instantly. No need to deploy frontend assets separately via Nginx or other web servers!
 
@@ -181,7 +181,7 @@ Once started, visit `http://localhost:8080` in your browser to access both the a
 
 If you wish to utilize Docker for lightweight one-click deployment and management in your production environment, the project has built-in premium containerization support:
 - **Multi-stage Build Dockerfile**: The compilation environment and the production runtime environment are physically isolated, keeping the final production image size at approximately 50MB.
-- **One-click Orchestration**: Spin up the Clash Proxy main service and the persistent PostgreSQL database in unison, with built-in database readiness health checks and service dependencies.
+- **One-click Orchestration**: Spin up the ClashSubAST main service and the persistent PostgreSQL database in unison, with built-in database readiness health checks and service dependencies.
 
 ### 1. Instant Startup
 On a server with Docker and Docker Compose installed, you only need to perform the following two simple steps to complete the rapid full-stack deployment:
@@ -208,7 +208,7 @@ docker compose down
 
 ### 3. Data Backup & Config Maintenance
 * **Configuration Update**: You can modify the `config.toml` file directly on the host machine. After editing, run `docker compose restart app` to restart the application container and apply the updates.
-* **Database Persistence**: The database records are securely stored in the Docker Named Volume `clash-proxy-pgdata`. Even if the container cluster is completely removed and recreated, your data remains safe and sound.
+* **Database Persistence**: The database records are securely stored in the Docker Named Volume `clash-sub-ast-pgdata`. Even if the container cluster is completely removed and recreated, your data remains safe and sound.
 
 ---
 
