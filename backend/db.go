@@ -38,6 +38,7 @@ type User struct {
 	ID        uint   `gorm:"primarykey"`
 	Username  string `gorm:"uniqueIndex;not null"`
 	Password  string `gorm:"not null"`
+	SubToken  string `gorm:"type:text"`
 	CreatedAt int64  `gorm:"autoCreateTime"`
 }
 

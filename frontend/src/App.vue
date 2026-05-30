@@ -38,6 +38,40 @@ const result = ref<{ url: string; raw_response: string; decoded: string } | null
   null,
 );
 
+// 最终订阅生成状态
+const isGeneratingSubLink = ref(false);
+const subLinkDialogVisible = ref(false);
+const finalSubLink = ref("");
+
+const generateSubLink = async () => {
+  isGeneratingSubLink.value = true;
+  try {
+    const res = await axios.post("http://localhost:8080/api/generate-sub-token");
+    if (res.data.code === 200) {
+      const token = res.data.data.token;
+      // 构建完整的 URL
+      finalSubLink.value = `http://localhost:8080/sub?token=${token}`;
+      subLinkDialogVisible.value = true;
+    } else {
+      ElMessage.error(res.data.message || "生成失败");
+    }
+  } catch (err: any) {
+    console.error(err);
+    ElMessage.error(err.response?.data?.message || "生成失败，请检查网络或登录状态");
+  } finally {
+    isGeneratingSubLink.value = false;
+  }
+};
+
+const copySubLink = async () => {
+  try {
+    await navigator.clipboard.writeText(finalSubLink.value);
+    ElMessage.success("链接已复制到剪贴板！");
+  } catch (err) {
+    ElMessage.error("复制失败，请手动复制");
+  }
+};
+
 const loadSubscription = async () => {
   try {
     const res = await axios.get("http://localhost:8080/api/subscription");
@@ -1196,6 +1230,15 @@ const submitChangePassword = async () => {
                 >
                   导出 YAML
                 </el-button>
+                <el-button
+                  type="warning"
+                  size="default"
+                  icon="Link"
+                  @click="generateSubLink"
+                  :loading="isGeneratingSubLink"
+                >
+                  生成最终订阅
+                </el-button>
               </el-button-group>
             </div>
           </div>
@@ -1920,6 +1963,34 @@ const submitChangePassword = async () => {
         >
           {{ editingRuleId ? "更新并立即云端同步" : "保存并立即覆盖同步" }}
         </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 最终订阅链接弹窗 -->
+    <el-dialog
+      v-model="subLinkDialogVisible"
+      title="🎉 最终订阅链接生成成功"
+      width="500px"
+      class="glass-dialog"
+    >
+      <div style="padding: 10px 0;">
+        <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 14px; line-height: 1.5;">
+          请复制以下专属订阅链接并导入您的客户端（如 Clash, Mihomo 等）。
+          <br/><br/>
+          <strong style="color: var(--el-color-danger);">⚠️ 每次生成新链接后，旧的订阅链接将立即作废！</strong>
+        </p>
+        <el-input
+          v-model="finalSubLink"
+          readonly
+          class="copy-input"
+        >
+          <template #append>
+            <el-button icon="CopyDocument" @click="copySubLink" type="primary">复制</el-button>
+          </template>
+        </el-input>
+      </div>
+      <template #footer>
+        <el-button @click="subLinkDialogVisible = false" type="primary" plain>我知道了</el-button>
       </template>
     </el-dialog>
 

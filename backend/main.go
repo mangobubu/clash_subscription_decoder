@@ -51,6 +51,7 @@ func main() {
 	r.POST("/api/init", handleInit)
 	r.GET("/api/captcha", handleCaptcha)
 	r.POST("/api/login", handleLogin)
+	r.GET("/sub", handleFinalSubscription) // 最终订阅地址
 
 	// 需要认证的接口组
 	api := r.Group("/api")
@@ -60,6 +61,7 @@ func main() {
 	api.GET("/verify", handleVerify)
 	api.POST("/logout", handleLogout)
 	api.POST("/change-password", handleChangePassword)
+	api.POST("/generate-sub-token", handleGenerateSubToken)
 
 	// 数据备份与导入恢复
 	api.GET("/backup", handleBackup)
@@ -1489,4 +1491,108 @@ func ReapplyRulesToLatestSubscription() {
 		sub.Decoded = decodedContent
 		DB.Save(&sub)
 	}
+}
+
+// handleGenerateSubToken 生成新的订阅 Token 并作废旧 Token
+func handleGenerateSubToken(c *gin.Context) {
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
+		return
+	}
+
+	var user User
+	if err := DB.Where("username = ?", username).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "用户不存在"})
+		return
+	}
+
+	rawToken := fmt.Sprintf("%s|%d|%s", user.Username, time.Now().Unix(), uuid.New().String())
+	token := base64.URLEncoding.EncodeToString([]byte(rawToken))
+
+	user.SubToken = token
+	if err := DB.Save(&user).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存 Token 失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Token 生成成功", "data": gin.H{"token": token}})
+}
+
+// handleFinalSubscription 最终订阅地址接口
+func handleFinalSubscription(c *gin.Context) {
+	token := c.Query("token")
+	if token == "" {
+		c.String(http.StatusUnauthorized, "Missing token")
+		return
+	}
+
+	var user User
+	if err := DB.Where("sub_token = ?", token).First(&user).Error; err != nil {
+		c.String(http.StatusUnauthorized, "Invalid or expired token")
+		return
+	}
+
+	var sub Subscription
+	if err := DB.Order("updated_at desc").First(&sub).Error; err != nil {
+		c.String(http.StatusNotFound, "No subscription found in database")
+		return
+	}
+
+	targetURL := sub.URL
+	if targetURL == "" {
+		c.String(http.StatusBadRequest, "Subscription URL is empty")
+		return
+	}
+
+	// 1. 尝试从上游拉取最新响应
+	rawResponse, err := fetchURLContent(targetURL)
+	if err != nil {
+		// 容错降级返回缓存
+		if sub.Decoded != "" {
+			c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(sub.Decoded))
+			return
+		}
+		c.String(http.StatusBadGateway, "Failed to fetch original subscription: "+err.Error())
+		return
+	}
+
+	// 2. 解码并清洗
+	var decodedContent string
+	decoded, err := decodeAdaptiveBase64(rawResponse)
+	if err != nil {
+		if strings.Contains(rawResponse, "proxies:") || strings.Contains(rawResponse, "outbounds:") || strings.Contains(rawResponse, "servers:") {
+			decodedContent = rawResponse
+		} else {
+			if sub.Decoded != "" {
+				c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(sub.Decoded))
+				return
+			}
+			c.String(http.StatusUnprocessableEntity, "Unsupported format")
+			return
+		}
+	} else {
+		decodedContent = decoded
+	}
+
+	lines := strings.Split(decodedContent, "\n")
+	for i, line := range lines {
+		if unescaped, err := url.PathUnescape(strings.TrimSpace(line)); err == nil {
+			lines[i] = unescaped
+		}
+	}
+	decodedContent = strings.Join(lines, "\n")
+
+	// 3. AST 注入
+	decodedContent = injectCustomNodes(decodedContent)
+	decodedContent = injectCustomGroups(decodedContent)
+	decodedContent = injectCustomRules(decodedContent)
+
+	// 4. 更新缓存
+	sub.RawResponse = rawResponse
+	sub.Decoded = decodedContent
+	DB.Save(&sub)
+
+	// 5. 返回纯 YAML
+	c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(decodedContent))
 }
