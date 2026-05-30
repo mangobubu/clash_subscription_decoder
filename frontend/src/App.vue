@@ -28,7 +28,7 @@ const cmExtensions = [
   EditorView.lineWrapping,
 ];
 
-// 状态定义
+// 状态定�?
 const inputUrl = ref("");
 const isLoading = ref(false);
 const activeTab = ref("nodes");
@@ -56,7 +56,7 @@ const loadSubscription = async () => {
   }
 };
 
-// ---------------------- 自定义资源字典状态 ----------------------
+// ---------------------- 自定义资源字典状�?----------------------
 const customNodesDict = ref<Record<string, any>>({});
 const customGroupsDict = ref<Record<string, any>>({});
 const customRulesDict = ref<Record<string, any>>({});
@@ -94,7 +94,7 @@ const fetchCustomData = async () => {
     }
     customRulesDict.value = rDict;
   } catch (e) {
-    console.error("获取自定义数据失败", e);
+    console.error("获取自定义数据失�?, e);
   }
 };
 
@@ -126,7 +126,7 @@ interface ProxyNode {
   details: Record<string, any>;
 }
 
-// 快速填入 Mock 地址
+// 快速填�?Mock 地址
 const handleQuickMock = () => {
   inputUrl.value = "mock.clash.local/sub";
   handleDecode();
@@ -139,7 +139,7 @@ const handleClear = () => {
   errorMsg.value = "";
 };
 
-// 解析并获取 Base64 内容
+// 解析并获�?Base64 内容
 const handleDecode = async () => {
   const url = inputUrl.value.trim();
   if (!url) {
@@ -159,8 +159,8 @@ const handleDecode = async () => {
       result.value = response.data.data;
       hasSubscription.value = true;
       await fetchCustomData();
-      ElMessage.success("成功拉取并完成 Base64 解码！");
-      // 如果解析出来的节点数大于0，默认跳到 nodes 页签，否则跳到 text
+      ElMessage.success("成功拉取并完�?Base64 解码�?);
+      // 如果解析出来的节点数大于0，默认跳�?nodes 页签，否则跳�?text
       if (parsedNodes.value.length > 0) {
         activeTab.value = "nodes";
       } else {
@@ -172,7 +172,7 @@ const handleDecode = async () => {
   } catch (error: any) {
     console.error(error);
     let msg =
-      "网络连接失败，请检查后端服务是否正常启动 (http://localhost:8080)";
+      "网络连接失败，请检查后端服务是否正常启�?(http://localhost:8080)";
     if (error.response && error.response.data) {
       msg = error.response.data.message || msg;
       if (error.response.data.error) {
@@ -182,13 +182,13 @@ const handleDecode = async () => {
       msg = error.message;
     }
     errorMsg.value = msg;
-    ElMessage.error("获取或解码失败");
+    ElMessage.error("获取或解码失�?);
   } finally {
     isLoading.value = false;
   }
 };
 
-// 核心响应式配置对象
+// 核心响应式配置对�?
 const parsedConfig = computed<any>(() => {
   if (!result.value || !result.value.decoded) return null;
   try {
@@ -211,16 +211,16 @@ const parsedNodes = computed<ProxyNode[]>(() => {
   }));
 });
 
-// 代理组解析
+// 代理组解�?
 const proxyGroups = computed<any[]>(() => {
   if (!parsedConfig.value || !parsedConfig.value["proxy-groups"]) return [];
   return parsedConfig.value["proxy-groups"];
 });
 
-// 规则搜索关键字
+// 规则搜索关键�?
 const ruleSearchQuery = ref("");
 
-// 分流规则目标策略筛选
+// 分流规则目标策略筛�?
 const ruleTargetFilter = ref("");
 const ruleTargets = computed(() => {
   if (!parsedConfig.value || !parsedConfig.value.rules) return [];
@@ -233,7 +233,7 @@ const ruleTargets = computed(() => {
   return Array.from(targets).sort();
 });
 
-// 规则分页状态
+// 规则分页状�?
 const currentRulePage = ref(1);
 const rulePageSize = ref(100);
 
@@ -280,12 +280,12 @@ const paginatedRules = computed(() => {
   return parsedRules.value.slice(start, end);
 });
 
-// 根据节点名称自适应匹配国旗表情包
+// 根据节点名称自适应匹配国旗表情�?
 const getFlagEmoji = (name: string): string => {
   const n = name.toUpperCase();
   if (n.includes("香港") || n.includes("HK") || n.includes("HONGKONG"))
     return "🇭🇰";
-  if (n.includes("新加坡") || n.includes("SG") || n.includes("SINGAPORE"))
+  if (n.includes("新加�?) || n.includes("SG") || n.includes("SINGAPORE"))
     return "🇸🇬";
   if (
     n.includes("日本") ||
@@ -299,7 +299,7 @@ const getFlagEmoji = (name: string): string => {
     n.includes("美国") ||
     n.includes("US") ||
     n.includes("UNITED STATES") ||
-    n.includes("美")
+    n.includes("�?)
   )
     return "🇺🇸";
   if (n.includes("台湾") || n.includes("TW") || n.includes("TAIWAN"))
@@ -320,7 +320,7 @@ const getFlagEmoji = (name: string): string => {
     return "🇬🇧";
   if (n.includes("德国") || n.includes("DE") || n.includes("GERMANY"))
     return "🇩🇪";
-  if (n.includes("俄罗斯") || n.includes("RU") || n.includes("RUSSIA"))
+  if (n.includes("俄罗�?) || n.includes("RU") || n.includes("RUSSIA"))
     return "🇷🇺";
   return "🌐";
 };
@@ -346,7 +346,7 @@ const stats = computed(() => {
   return { size, lines };
 });
 
-// 一键复制
+// 一键复�?
 const handleCopy = async () => {
   if (!result.value) return;
   try {
@@ -371,7 +371,7 @@ const handleDownload = () => {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  ElMessage.success("成功导出本地配置文件！");
+  ElMessage.success("成功导出本地配置文件�?);
 };
 
 // ---------------------- 自定义组管理逻辑 ----------------------
@@ -415,7 +415,7 @@ const deleteCustomGroup = (groupName: string) => {
   const customInfo = customGroupsDict.value[groupName];
   if (!customInfo) return;
   ElMessageBox.confirm(
-    `确定要删除自定义策略组 [${groupName}] 吗？`,
+    `确定要删除自定义策略�?[${groupName}] 吗？`,
     "安全提示",
     {
       confirmButtonText: "确定删除",
@@ -432,7 +432,7 @@ const deleteCustomGroup = (groupName: string) => {
           ElMessage.success("自定义策略组已成功删除！");
           await fetchCustomData();
           if (inputUrl.value) {
-            await handleDecode();
+            await loadSubscription();
           }
         }
       } catch (err: any) {
@@ -484,13 +484,13 @@ const saveCustomGroup = async () => {
     if (res.data.code === 200) {
       ElMessage.success(
         editingGroupId.value
-          ? "自定义组更新成功！"
+          ? "自定义组更新成功�?
           : "自定义组已云端保存成功！",
       );
       groupDialogVisible.value = false;
       await fetchCustomData();
       if (inputUrl.value) {
-        await handleDecode();
+        await loadSubscription();
       }
     } else {
       throw new Error(res.data.message);
@@ -576,7 +576,7 @@ const deleteCustomNode = (nodeName: string) => {
     `确定要彻底删除自定义节点 [${nodeName}] 吗？`,
     "安全提示",
     {
-      confirmButtonText: "立即销毁",
+      confirmButtonText: "立即销�?,
       cancelButtonText: "取消保留",
       type: "warning",
     },
@@ -590,7 +590,7 @@ const deleteCustomNode = (nodeName: string) => {
           ElMessage.success("自定义节点已被彻底删除！");
           await fetchCustomData();
           if (inputUrl.value) {
-            await handleDecode();
+            await loadSubscription();
           }
         }
       } catch (err: any) {
@@ -602,7 +602,7 @@ const deleteCustomNode = (nodeName: string) => {
 
 const parseNodeLink = async () => {
   if (!nodeLinkForm.value.link) {
-    ElMessage.warning("请输入节点链接");
+    ElMessage.warning("请输入节点链�?);
     return;
   }
   isParsingLink.value = true;
@@ -617,7 +617,7 @@ const parseNodeLink = async () => {
       newNodeForm.value.server = data.server || "";
       newNodeForm.value.port = data.port || 443;
       newNodeForm.value.config = data.config || {};
-      ElMessage.success("链接解析成功！请在右侧检查参数");
+      ElMessage.success("链接解析成功！请在右侧检查参�?);
       nodeActiveTab.value = "manual";
     } else {
       throw new Error(res.data.message);
@@ -642,7 +642,7 @@ const saveCustomNode = async () => {
   }
   isSubmittingNode.value = true;
 
-  // 同步基础信息到 config
+  // 同步基础信息�?config
   newNodeForm.value.config.name = newNodeForm.value.name;
   newNodeForm.value.config.type = newNodeForm.value.type;
   newNodeForm.value.config.server = newNodeForm.value.server;
@@ -670,7 +670,7 @@ const saveCustomNode = async () => {
       nodeDialogVisible.value = false;
       await fetchCustomData();
       if (inputUrl.value) {
-        await handleDecode();
+        await loadSubscription();
       }
     } else {
       throw new Error(res.data.message);
@@ -717,7 +717,7 @@ const batchSaveRules = async () => {
     dirtyRulesMap.value = {};
     await fetchCustomData();
     if (inputUrl.value) {
-      await handleDecode();
+      await loadSubscription();
     }
   } catch (error: any) {
     ElMessage.error("部分策略保存失败: " + (error.response?.data?.message || error.message));
@@ -792,10 +792,10 @@ const deleteCustomRule = (row: any) => {
           `http://localhost:8080/api/custom-rules/${customInfo.ID}`
         );
         if (res.data.code === 200) {
-          ElMessage.success("自定义分流规则已成功移除！");
+          ElMessage.success("自定义分流规则已成功移除�?);
           await fetchCustomData();
           if (inputUrl.value) {
-            await handleDecode();
+            await loadSubscription();
           }
         }
       } catch (err: any) {
@@ -811,7 +811,7 @@ const saveCustomRule = async () => {
     return;
   }
   if (newRuleForm.value.type !== "MATCH" && !newRuleForm.value.payload) {
-    ElMessage.warning("请输入匹配内容 (Payload)");
+    ElMessage.warning("请输入匹配内�?(Payload)");
     return;
   }
 
@@ -836,12 +836,12 @@ const saveCustomRule = async () => {
     }
     if (res.data.code === 200) {
       ElMessage.success(
-        editingRuleId.value ? "规则更新成功！" : "规则已云端接管生效！"
+        editingRuleId.value ? "规则更新成功�? : "规则已云端接管生效！"
       );
       ruleDialogVisible.value = false;
       await fetchCustomData();
       if (inputUrl.value) {
-        await handleDecode();
+        await loadSubscription();
       }
     } else {
       throw new Error(res.data.message);
@@ -860,7 +860,7 @@ const isCustomRule = (row: any) => {
   return !!customRulesDict.value[key];
 };
 
-// ---------------------- 个人中心 (修改密码与退出登录) ----------------------
+// ---------------------- 个人中心 (修改密码与退出登�? ----------------------
 const changePasswordVisible = ref(false);
 const isChangingPassword = ref(false);
 const passwordFormRef = ref<any>(null);
@@ -875,7 +875,7 @@ const validateConfirmPassword = (_rule: any, value: string, callback: any) => {
   if (value === "") {
     callback(new Error("请再次输入新密码"));
   } else if (value !== passwordForm.value.newPassword) {
-    callback(new Error("两次输入密码不一致!"));
+    callback(new Error("两次输入密码不一�?"));
   } else {
     callback();
   }
@@ -883,12 +883,12 @@ const validateConfirmPassword = (_rule: any, value: string, callback: any) => {
 
 const passwordRules = {
   oldPassword: [
-    { required: true, message: "请输入当前密码", trigger: "blur" },
-    { min: 5, message: "密码长度不能小于 5 位", trigger: "blur" },
+    { required: true, message: "请输入当前密�?, trigger: "blur" },
+    { min: 5, message: "密码长度不能小于 5 �?, trigger: "blur" },
   ],
   newPassword: [
     { required: true, message: "请输入新密码", trigger: "blur" },
-    { min: 5, message: "密码长度不能小于 5 位", trigger: "blur" },
+    { min: 5, message: "密码长度不能小于 5 �?, trigger: "blur" },
   ],
   confirmPassword: [
     { required: true, validator: validateConfirmPassword, trigger: "blur" },
@@ -903,10 +903,10 @@ const handleFileUpload = async (event: any) => {
 
   try {
     await ElMessageBox.confirm(
-      "此操作将不可逆地覆盖当前所有的自定义节点、策略组与分流规则，是否确认导入？",
+      "此操作将不可逆地覆盖当前所有的自定义节点、策略组与分流规则，是否确认导入�?,
       "⚠️ 高危操作确认",
       {
-        confirmButtonText: "确认覆盖并导入",
+        confirmButtonText: "确认覆盖并导�?,
         cancelButtonText: "取消",
         type: "warning",
         customClass: "glass-dialog",
@@ -919,14 +919,14 @@ const handleFileUpload = async (event: any) => {
         const json = JSON.parse(e.target?.result as string);
         const res = await axios.post("http://localhost:8080/api/import", json);
         if (res.data.code === 200) {
-          ElMessage.success(res.data.message || "备份导入成功！");
+          ElMessage.success(res.data.message || "备份导入成功�?);
           await fetchCustomData();
         } else {
           ElMessage.error(res.data.message || "导入失败");
         }
       } catch (err: any) {
         ElMessage.error(
-          "文件解析或请求失败: " +
+          "文件解析或请求失�? " +
             (err.response?.data?.message || err.message)
         );
       } finally {
@@ -942,7 +942,7 @@ const handleFileUpload = async (event: any) => {
 const handleUserCommand = async (command: string) => {
   if (command === "logout") {
     try {
-      await ElMessageBox.confirm("确定要退出登录吗？", "提示", {
+      await ElMessageBox.confirm("确定要退出登录吗�?, "提示", {
         confirmButtonText: "确定",
         cancelButtonText: "取消",
         type: "warning",
@@ -957,7 +957,7 @@ const handleUserCommand = async (command: string) => {
       
       localStorage.removeItem("token");
       isLoggedIn.value = false;
-      ElMessage.success("已成功退出登录");
+      ElMessage.success("已成功退出登�?);
     } catch {
       // cancel
     }
@@ -1008,7 +1008,7 @@ const submitChangePassword = async () => {
         });
         
         if (res.data.code === 200) {
-          ElMessage.success("密码修改成功，请重新登录！");
+          ElMessage.success("密码修改成功，请重新登录�?);
           changePasswordVisible.value = false;
           localStorage.removeItem("token");
           isLoggedIn.value = false;
@@ -1017,7 +1017,7 @@ const submitChangePassword = async () => {
         }
       } catch (error: any) {
         ElMessage.error(
-          error.response?.data?.message || error.message || "请求失败，请检查网络"
+          error.response?.data?.message || error.message || "请求失败，请检查网�?
         );
       } finally {
         isChangingPassword.value = false;
@@ -1036,7 +1036,7 @@ const submitChangePassword = async () => {
     <!-- 头部精致毛玻璃导航栏 -->
     <header class="main-header glass-card">
       <div class="logo-wrapper">
-        <span class="logo-icon">⚡</span>
+        <span class="logo-icon">�?/span>
         <h1 class="logo-title text-gradient">CLASH SUBSCRIPTION DECODER</h1>
       </div>
       <div class="header-actions">
@@ -1054,7 +1054,7 @@ const submitChangePassword = async () => {
         <el-dropdown trigger="click" @command="handleUserCommand">
           <span class="el-dropdown-link user-dropdown">
             <el-avatar :size="28" class="user-avatar">A</el-avatar>
-            <span class="username-text">管理员</span>
+            <span class="username-text">管理�?/span>
             <el-icon class="el-icon--right"><ArrowDown /></el-icon>
           </span>
           <template #dropdown>
@@ -1062,14 +1062,14 @@ const submitChangePassword = async () => {
               <el-dropdown-item command="backupData">⬇️ 备份数据</el-dropdown-item>
               <el-dropdown-item command="importData">⬆️ 导入备份</el-dropdown-item>
               <el-dropdown-item divided command="changePassword">🔑 修改密码</el-dropdown-item>
-              <el-dropdown-item divided command="logout">🚪 退出登录</el-dropdown-item>
+              <el-dropdown-item divided command="logout">🚪 退出登�?/el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
       </div>
     </header>
 
-    <!-- 隐藏的导入文件上传组件 -->
+    <!-- 隐藏的导入文件上传组�?-->
     <input 
       type="file" 
       ref="fileInputRef" 
@@ -1078,14 +1078,14 @@ const submitChangePassword = async () => {
       @change="handleFileUpload" 
     />
 
-    <!-- 中部内容主体区 -->
+    <!-- 中部内容主体�?-->
     <main class="main-content">
       <!-- 控制卡片面板 -->
       <section class="control-panel glass-card">
-        <h2 class="section-title">自适应 Base64 地址获取器</h2>
+        <h2 class="section-title">自适应 Base64 地址获取�?/h2>
         <p class="section-desc">
-          输入任意提供 Base64 编码数据的订阅地址或接口
-          URL，后端将自动请求、清洗并进行多重自适应解码。
+          输入任意提供 Base64 编码数据的订阅地址或接�?
+          URL，后端将自动请求、清洗并进行多重自适应解码�?
         </p>
 
         <div class="input-area">
@@ -1129,7 +1129,7 @@ const submitChangePassword = async () => {
               :disabled="isLoading"
               class="mock-btn"
             >
-              Mock 快速测试
+              Mock 快速测�?
             </el-button>
           </div>
         </div>
@@ -1147,7 +1147,7 @@ const submitChangePassword = async () => {
         </transition>
       </section>
 
-      <!-- 骨架屏加载动画 -->
+      <!-- 骨架屏加载动�?-->
       <section v-if="isLoading" class="skeleton-wrapper glass-card">
         <el-skeleton :rows="5" animated />
       </section>
@@ -1159,7 +1159,7 @@ const submitChangePassword = async () => {
           <div class="result-header">
             <div class="meta-info">
               <div class="meta-item">
-                <span class="meta-label">文件体积：</span>
+                <span class="meta-label">文件体积�?/span>
                 <el-tag size="small" effect="plain" type="info"
                   >{{ (stats.size / 1024).toFixed(2) }} KB</el-tag
                 >
@@ -1167,13 +1167,13 @@ const submitChangePassword = async () => {
               <div class="meta-item">
                 <span class="meta-label">总行数：</span>
                 <el-tag size="small" effect="plain" type="info"
-                  >{{ stats.lines }} 行</el-tag
+                  >{{ stats.lines }} �?/el-tag
                 >
               </div>
               <div v-if="parsedNodes.length > 0" class="meta-item">
-                <span class="meta-label">检测到节点：</span>
+                <span class="meta-label">检测到节点�?/span>
                 <el-tag size="small" effect="dark" type="success"
-                  >{{ parsedNodes.length }} 个</el-tag
+                  >{{ parsedNodes.length }} �?/el-tag
                 >
               </div>
             </div>
@@ -1200,13 +1200,13 @@ const submitChangePassword = async () => {
             </div>
           </div>
 
-          <!-- 页签切换区 -->
+          <!-- 页签切换�?-->
           <el-tabs v-model="activeTab" class="custom-tabs">
             <!-- 节点预览页签 -->
             <el-tab-pane name="nodes" v-if="parsedNodes.length > 0">
               <template #label>
                 <span class="tab-label"
-                  >⚡ 节点解析概览 ({{ parsedNodes.length }})</span
+                  >�?节点解析概览 ({{ parsedNodes.length }})</span
                 >
               </template>
               <div
@@ -1223,8 +1223,8 @@ const submitChangePassword = async () => {
                   round
                   @click="openNodeDialog"
                 >
-                  <span style="margin-right: 4px; font-weight: bold">+</span> ✨
-                  新增自定义节点
+                  <span style="margin-right: 4px; font-weight: bold">+</span> �?
+                  新增自定义节�?
                 </el-button>
               </div>
               <div class="nodes-grid">
@@ -1301,11 +1301,11 @@ const submitChangePassword = async () => {
               </div>
             </el-tab-pane>
 
-            <!-- 代理组页签 -->
+            <!-- 代理组页�?-->
             <el-tab-pane name="groups" v-if="proxyGroups.length > 0">
               <template #label>
                 <span class="tab-label"
-                  >🗂️ 代理组策略 ({{ proxyGroups.length }})</span
+                  >🗂�?代理组策�?({{ proxyGroups.length }})</span
                 >
               </template>
 
@@ -1363,14 +1363,14 @@ const submitChangePassword = async () => {
                         link
                         :icon="Edit"
                         @click="editCustomGroup(group.name)"
-                        title="编辑策略组"
+                        title="编辑策略�?
                       ></el-button>
                       <el-button
                         type="danger"
                         link
                         :icon="Delete"
                         @click="deleteCustomGroup(group.name)"
-                        title="删除策略组"
+                        title="删除策略�?
                       ></el-button>
                     </div>
                   </div>
@@ -1440,7 +1440,7 @@ const submitChangePassword = async () => {
                     @click="openRuleDialog"
                   >
                     <span style="margin-right: 4px; font-weight: bold">+</span>
-                    新增自定义规则
+                    新增自定义规�?
                   </el-button>
                 </div>
 
@@ -1486,7 +1486,7 @@ const submitChangePassword = async () => {
                           <el-option label="DIRECT (直连)" value="DIRECT" />
                           <el-option label="REJECT (拒绝)" value="REJECT" />
                           <el-option label="PROXY (默认代理)" value="PROXY" />
-                          <el-option-group label="现有策略组">
+                          <el-option-group label="现有策略�?>
                             <el-option
                               v-for="g in proxyGroups"
                               :key="g.name"
@@ -1508,7 +1508,7 @@ const submitChangePassword = async () => {
                           size="small"
                           type="danger"
                           effect="dark"
-                        >已覆盖 (云端)</el-tag>
+                        >已覆�?(云端)</el-tag>
                       </div>
                     </template>
                   </el-table-column>
@@ -1520,7 +1520,7 @@ const submitChangePassword = async () => {
                           link
                           :icon="Edit"
                           @click="editRule(scope.row)"
-                          :title="isCustomRule(scope.row) ? '高级编辑' : '高级编辑并接管'"
+                          :title="isCustomRule(scope.row) ? '高级编辑' : '高级编辑并接�?"
                         ></el-button>
                         <el-button
                           v-if="isCustomRule(scope.row)"
@@ -1535,7 +1535,7 @@ const submitChangePassword = async () => {
                   </el-table-column>
                 </el-table>
 
-                <!-- 分页器 -->
+                <!-- 分页�?-->
                 <div class="pagination-wrapper">
                   <el-pagination
                     v-model:current-page="currentRulePage"
@@ -1552,7 +1552,7 @@ const submitChangePassword = async () => {
             <!-- 明文文本页签 -->
             <el-tab-pane name="text">
               <template #label>
-                <span class="tab-label">📄 解码后明文配置</span>
+                <span class="tab-label">📄 解码后明文配�?/span>
               </template>
               <div class="editor-glass-wrapper">
                 <codemirror
@@ -1590,16 +1590,16 @@ const submitChangePassword = async () => {
     <el-dialog
       v-model="groupDialogVisible"
       :title="
-        editingGroupId ? '✨ 编辑云端自定义策略组' : '✨ 新增云端自定义策略组'
+        editingGroupId ? '�?编辑云端自定义策略组' : '�?新增云端自定义策略组'
       "
       width="550px"
       class="glass-dialog"
     >
       <el-form label-position="top">
-        <el-form-item label="策略组名称">
+        <el-form-item label="策略组名�?>
           <el-input
             v-model="newGroupForm.name"
-            placeholder="例如：我的超强备用线路"
+            placeholder="例如：我的超强备用线�?
           ></el-input>
         </el-form-item>
         <el-form-item label="策略类型 (Type)">
@@ -1612,7 +1612,7 @@ const submitChangePassword = async () => {
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="配置包含的目标代理">
+        <el-form-item label="配置包含的目标代�?>
           <div style="margin-bottom: 12px; display: flex; gap: 10px">
             <el-button
               size="small"
@@ -1620,7 +1620,7 @@ const submitChangePassword = async () => {
               plain
               @click="selectAllNodes"
             >
-              注入全部最新节点 [ALL_NODES]
+              注入全部最新节�?[ALL_NODES]
             </el-button>
             <el-button
               size="small"
@@ -1643,7 +1643,7 @@ const submitChangePassword = async () => {
               label="🌟 动态注入当前订阅全节点 [ALL_NODES]"
               value="[ALL_NODES]"
             />
-            <el-option-group label="现有策略组">
+            <el-option-group label="现有策略�?>
               <el-option
                 v-for="g in proxyGroups"
                 :key="g.name"
@@ -1661,10 +1661,10 @@ const submitChangePassword = async () => {
             </el-option-group>
           </el-select>
         </el-form-item>
-        <el-form-item label="排除节点关键字或正则 (Exclude) - 极简可选">
+        <el-form-item label="排除节点关键字或正则 (Exclude) - 极简可�?>
           <el-input
             v-model="newGroupForm.exclude"
-            placeholder="例如：特殊专线"
+            placeholder="例如：特殊专�?
             clearable
           ></el-input>
           <p
@@ -1675,7 +1675,7 @@ const submitChangePassword = async () => {
               line-height: 1.4;
             "
           >
-            仅当您有特殊的跨组排除需求时（如特定节点总是断流），才在此处填入正则表达式。
+            仅当您有特殊的跨组排除需求时（如特定节点总是断流），才在此处填入正则表达式�?
           </p>
         </el-form-item>
       </el-form>
@@ -1686,15 +1686,15 @@ const submitChangePassword = async () => {
           @click="saveCustomGroup"
           :loading="isSubmittingGroup"
         >
-          {{ editingGroupId ? "更新并立即云端同步" : "保存并立即云端同步" }}
+          {{ editingGroupId ? "更新并立即云端同�? : "保存并立即云端同�? }}
         </el-button>
       </template>
     </el-dialog>
 
-    <!-- 自定义节点弹窗 -->
+    <!-- 自定义节点弹�?-->
     <el-dialog
       v-model="nodeDialogVisible"
-      :title="editingNodeId ? '✨ 编辑云端自定义节点' : '✨ 新增云端自定义节点'"
+      :title="editingNodeId ? '�?编辑云端自定义节�? : '�?新增云端自定义节�?"
       width="600px"
       class="glass-dialog"
     >
@@ -1709,20 +1709,20 @@ const submitChangePassword = async () => {
               "
             >
               支持自动解析 vless://, hysteria2://, ss://, socks5://
-              等分享链接，一键提取核心参数。
+              等分享链接，一键提取核心参数�?
             </p>
             <el-input
               v-model="nodeLinkForm.link"
               type="textarea"
               :rows="4"
-              placeholder="请粘贴您的节点链接..."
+              placeholder="请粘贴您的节点链�?.."
             ></el-input>
             <div style="margin-top: 15px; text-align: right">
               <el-button
                 type="primary"
                 @click="parseNodeLink"
                 :loading="isParsingLink"
-                >一键解析链接</el-button
+                >一键解析链�?/el-button
               >
             </div>
           </div>
@@ -1750,10 +1750,10 @@ const submitChangePassword = async () => {
                 />
               </el-select>
             </el-form-item>
-            <el-form-item label="服务器">
+            <el-form-item label="服务�?>
               <el-input
                 v-model="newNodeForm.server"
-                placeholder="例如：example.com 或 IP"
+                placeholder="例如：example.com �?IP"
               ></el-input>
             </el-form-item>
             <el-form-item label="端口">
@@ -1767,7 +1767,7 @@ const submitChangePassword = async () => {
             <el-form-item label="UDP 转发">
               <el-switch
                 v-model="newNodeForm.config['udp']"
-                active-text="开启"
+                active-text="开�?
                 inactive-text="关闭"
               />
               <div
@@ -1778,7 +1778,7 @@ const submitChangePassword = async () => {
                   display: inline-block;
                 "
               >
-                开启以支持转发 STUN 及其他 UDP 协议包
+                开启以支持转发 STUN 及其�?UDP 协议�?
               </div>
             </el-form-item>
             <el-form-item label="前置拨号 (dialer-proxy)">
@@ -1786,11 +1786,11 @@ const submitChangePassword = async () => {
                 v-model="newNodeForm.config['dialer-proxy']"
                 clearable
                 filterable
-                placeholder="（可选）选择前置代理名，留空则直连"
+                placeholder="（可选）选择前置代理名，留空则直�?
                 style="width: 100%"
                 popper-class="glass-dropdown"
               >
-                <el-option-group label="现有策略组">
+                <el-option-group label="现有策略�?>
                   <el-option
                     v-for="g in proxyGroups"
                     :key="g.name"
@@ -1815,8 +1815,8 @@ const submitChangePassword = async () => {
                   line-height: 1.4;
                 "
               >
-                最新内核移除了 relay，链式代理现由前置拨号 (dialer-proxy)
-                原生接管。
+                最新内核移除了 relay，链式代理现由前置拨�?(dialer-proxy)
+                原生接管�?
               </p>
             </el-form-item>
             <el-form-item label="详细配置">
@@ -1829,8 +1829,8 @@ const submitChangePassword = async () => {
                 "
               >
                 高级参数（如 uuid, tls, network 等），将作为 JSON
-                对象合并到该节点配置中。<br />
-                解析链接后，这里会预先填充。如需手动输入格式请使用合法的 JSON。
+                对象合并到该节点配置中�?br />
+                解析链接后，这里会预先填充。如需手动输入格式请使用合法的 JSON�?
               </p>
               <codemirror
                 v-model="configString"
@@ -1853,17 +1853,17 @@ const submitChangePassword = async () => {
               @click="saveCustomNode"
               :loading="isSubmittingNode"
             >
-              {{ editingNodeId ? "确认并更新云端" : "确认并存入云端" }}
+              {{ editingNodeId ? "确认并更新云�? : "确认并存入云�? }}
             </el-button>
           </div>
         </el-tab-pane>
       </el-tabs>
     </el-dialog>
 
-    <!-- 自定义规则弹窗 -->
+    <!-- 自定义规则弹�?-->
     <el-dialog
       v-model="ruleDialogVisible"
-      :title="editingRuleId ? '✏️ 编辑云端自定义规则' : '✏️ 新增 / 接管分流规则'"
+      :title="editingRuleId ? '✏️ 编辑云端自定义规�? : '✏️ 新增 / 接管分流规则'"
       width="550px"
       class="glass-dialog"
     >
@@ -1873,7 +1873,7 @@ const submitChangePassword = async () => {
             <el-option v-for="t in ruleTypes" :key="t" :label="t" :value="t" />
           </el-select>
         </el-form-item>
-        <el-form-item label="匹配内容 (Payload) - MATCH 可留空">
+        <el-form-item label="匹配内容 (Payload) - MATCH 可留�?>
           <el-input
             v-model="newRuleForm.payload"
             placeholder="例如：google.com"
@@ -1885,14 +1885,14 @@ const submitChangePassword = async () => {
             filterable
             allow-create
             default-first-option
-            placeholder="请选择或输入目标策略"
+            placeholder="请选择或输入目标策�?
             style="width: 100%"
             popper-class="glass-dropdown"
           >
             <el-option label="DIRECT (直连)" value="DIRECT" />
             <el-option label="REJECT (拒绝)" value="REJECT" />
             <el-option label="PROXY (默认代理)" value="PROXY" />
-            <el-option-group label="现有策略组">
+            <el-option-group label="现有策略�?>
               <el-option
                 v-for="g in proxyGroups"
                 :key="g.name"
@@ -1918,7 +1918,7 @@ const submitChangePassword = async () => {
           @click="saveCustomRule"
           :loading="isSubmittingRule"
         >
-          {{ editingRuleId ? "更新并立即云端同步" : "保存并立即覆盖同步" }}
+          {{ editingRuleId ? "更新并立即云端同�? : "保存并立即覆盖同�? }}
         </el-button>
       </template>
     </el-dialog>
@@ -1931,10 +1931,10 @@ const submitChangePassword = async () => {
       </p>
     </footer>
 
-    <!-- 修改密码对话框 -->
+    <!-- 修改密码对话�?-->
     <el-dialog
       v-model="changePasswordVisible"
-      title="🔑 修改管理员密码"
+      title="🔑 修改管理员密�?
       width="400px"
       align-center
       class="glass-dialog"
@@ -1951,18 +1951,18 @@ const submitChangePassword = async () => {
             v-model="passwordForm.oldPassword" 
             type="password" 
             show-password 
-            placeholder="请输入当前密码" 
+            placeholder="请输入当前密�? 
           />
         </el-form-item>
-        <el-form-item label="新密码" prop="newPassword">
+        <el-form-item label="新密�? prop="newPassword">
           <el-input 
             v-model="passwordForm.newPassword" 
             type="password" 
             show-password 
-            placeholder="请输入新密码 (最小5位)" 
+            placeholder="请输入新密码 (最�?�?" 
           />
         </el-form-item>
-        <el-form-item label="确认新密码" prop="confirmPassword">
+        <el-form-item label="确认新密�? prop="confirmPassword">
           <el-input 
             v-model="passwordForm.confirmPassword" 
             type="password" 
@@ -1999,7 +1999,7 @@ const submitChangePassword = async () => {
   box-sizing: border-box;
 }
 
-/* 导航栏样式 */
+/* 导航栏样�?*/
 .main-header {
   display: flex;
   justify-content: space-between;
@@ -2295,7 +2295,7 @@ const submitChangePassword = async () => {
   border-radius: 4px;
 }
 
-/* 骨架屏容器 */
+/* 骨架屏容�?*/
 .skeleton-wrapper {
   padding: 30px;
 }
@@ -2327,7 +2327,7 @@ const submitChangePassword = async () => {
   transform: translateY(20px);
 }
 
-/* CodeMirror 高颜值卡片包裹 */
+/* CodeMirror 高颜值卡片包�?*/
 .editor-glass-wrapper {
   margin-top: 20px;
   border-radius: 12px;
@@ -2360,7 +2360,7 @@ const submitChangePassword = async () => {
   background-color: rgba(255, 255, 255, 0.04) !important;
 }
 
-/* 代理组卡片系统 */
+/* 代理组卡片系�?*/
 .groups-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));

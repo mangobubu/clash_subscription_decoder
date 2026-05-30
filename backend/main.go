@@ -445,6 +445,7 @@ func handleImport(c *gin.Context) {
 		return
 	}
 
+	ReapplyRulesToLatestSubscription()
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "备份导入成功，全部数据已覆盖"})
 }
 
@@ -609,6 +610,7 @@ func handleCreateCustomGroup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存失败", "error": err.Error()})
 		return
 	}
+	ReapplyRulesToLatestSubscription()
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "保存成功", "data": group})
 }
 
@@ -642,6 +644,7 @@ func handleUpdateCustomGroup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新失败", "error": err.Error()})
 		return
 	}
+	ReapplyRulesToLatestSubscription()
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "更新成功", "data": group})
 }
 
@@ -652,6 +655,7 @@ func handleDeleteCustomGroup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除失败", "error": err.Error()})
 		return
 	}
+	ReapplyRulesToLatestSubscription()
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功"})
 }
 
@@ -710,6 +714,7 @@ func handleCreateCustomNode(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存失败", "error": err.Error()})
 		return
 	}
+	ReapplyRulesToLatestSubscription()
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "保存成功", "data": node})
 }
 
@@ -720,6 +725,7 @@ func handleDeleteCustomNode(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除失败", "error": err.Error()})
 		return
 	}
+	ReapplyRulesToLatestSubscription()
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功"})
 }
 
@@ -755,6 +761,7 @@ func handleUpdateCustomNode(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新失败", "error": err.Error()})
 		return
 	}
+	ReapplyRulesToLatestSubscription()
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "更新成功", "data": node})
 }
 
@@ -788,7 +795,8 @@ func handleCreateCustomRule(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "覆盖更新失败", "error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"code": 200, "message": "规则已覆盖更新", "data": existingRule})
+		ReapplyRulesToLatestSubscription()
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "规则已覆盖更新", "data": existingRule})
 		return
 	}
 
@@ -802,6 +810,7 @@ func handleCreateCustomRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存失败", "error": err.Error()})
 		return
 	}
+	ReapplyRulesToLatestSubscription()
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "保存成功", "data": rule})
 }
 
@@ -832,6 +841,7 @@ func handleUpdateCustomRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新失败", "error": err.Error()})
 		return
 	}
+	ReapplyRulesToLatestSubscription()
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "更新成功", "data": rule})
 }
 
@@ -842,6 +852,7 @@ func handleDeleteCustomRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除失败", "error": err.Error()})
 		return
 	}
+	ReapplyRulesToLatestSubscription()
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功"})
 }
 
@@ -1433,5 +1444,49 @@ func autoPruneDialerProxyLoops(proxiesNode, proxyGroupsNode *yaml.Node) {
 			}
 			proxiesSeq.Content = newContent
 		}
+	}
+}
+
+// ProcessSubscriptionRawData 集中处理订阅的解码、明文转换及各种自定义规则的注入 (DRY 原则)
+func ProcessSubscriptionRawData(rawResponse string) (string, error) {
+	var decodedContent string
+	decoded, err := decodeAdaptiveBase64(rawResponse)
+	if err != nil {
+		if strings.Contains(rawResponse, "proxies:") || strings.Contains(rawResponse, "outbounds:") || strings.Contains(rawResponse, "servers:") {
+			decodedContent = rawResponse
+		} else {
+			return "", fmt.Errorf("解析失败，且不包含常见配置文件特征，目标地址返回的内容格式不支持: %v", err)
+		}
+	} else {
+		decodedContent = decoded
+	}
+
+	lines := strings.Split(decodedContent, "\n")
+	for i, line := range lines {
+		if unescaped, err := url.PathUnescape(strings.TrimSpace(line)); err == nil {
+			lines[i] = unescaped
+		}
+	}
+	decodedContent = strings.Join(lines, "\n")
+	
+	decodedContent = injectCustomNodes(decodedContent)
+	decodedContent = injectCustomGroups(decodedContent)
+	decodedContent = injectCustomRules(decodedContent)
+
+	return decodedContent, nil
+}
+
+// ReapplyRulesToLatestSubscription 获取最新订阅并重新应用所有规则
+func ReapplyRulesToLatestSubscription() {
+	var sub Subscription
+	if err := DB.Order("updated_at desc").First(&sub).Error; err != nil {
+		return
+	}
+	if sub.RawResponse == "" {
+		return
+	}
+	if decodedContent, err := ProcessSubscriptionRawData(sub.RawResponse); err == nil {
+		sub.Decoded = decodedContent
+		DB.Save(&sub)
 	}
 }
