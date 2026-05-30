@@ -5,16 +5,21 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
+	"golang.org/x/crypto/bcrypt"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/mojocn/base64Captcha"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,29 +45,42 @@ func main() {
 	// 注册跨域中间件
 	r.Use(CORSMiddleware())
 
+	// 注册公开接口
+	r.GET("/api/check-init", handleCheckInit)
+	r.POST("/api/init", handleInit)
+	r.GET("/api/captcha", handleCaptcha)
+	r.POST("/api/login", handleLogin)
+
+	// 需要认证的接口组
+	api := r.Group("/api")
+	api.Use(AuthMiddleware())
+	
+	// 注册验证接口
+	api.GET("/verify", handleVerify)
+
 	// 注册解码接口
-	r.POST("/api/decode", handleDecode)
+	api.POST("/decode", handleDecode)
 	
 	// 注册解析节点链接接口
-	r.POST("/api/parse-link", handleParseLink)
+	api.POST("/parse-link", handleParseLink)
 
 	// 注册自定义节点 CRUD 接口
-	r.GET("/api/custom-nodes", handleGetCustomNodes)
-	r.POST("/api/custom-nodes", handleCreateCustomNode)
-	r.PUT("/api/custom-nodes/:id", handleUpdateCustomNode)
-	r.DELETE("/api/custom-nodes/:id", handleDeleteCustomNode)
+	api.GET("/custom-nodes", handleGetCustomNodes)
+	api.POST("/custom-nodes", handleCreateCustomNode)
+	api.PUT("/custom-nodes/:id", handleUpdateCustomNode)
+	api.DELETE("/custom-nodes/:id", handleDeleteCustomNode)
 
 	// 注册自定义组 CRUD 接口
-	r.GET("/api/custom-groups", handleGetCustomGroups)
-	r.POST("/api/custom-groups", handleCreateCustomGroup)
-	r.PUT("/api/custom-groups/:id", handleUpdateCustomGroup)
-	r.DELETE("/api/custom-groups/:id", handleDeleteCustomGroup)
+	api.GET("/custom-groups", handleGetCustomGroups)
+	api.POST("/custom-groups", handleCreateCustomGroup)
+	api.PUT("/custom-groups/:id", handleUpdateCustomGroup)
+	api.DELETE("/custom-groups/:id", handleDeleteCustomGroup)
 
 	// 注册自定义分流规则 CRUD 接口
-	r.GET("/api/custom-rules", handleGetCustomRules)
-	r.POST("/api/custom-rules", handleCreateCustomRule)
-	r.PUT("/api/custom-rules/:id", handleUpdateCustomRule)
-	r.DELETE("/api/custom-rules/:id", handleDeleteCustomRule)
+	api.GET("/custom-rules", handleGetCustomRules)
+	api.POST("/custom-rules", handleCreateCustomRule)
+	api.PUT("/custom-rules/:id", handleUpdateCustomRule)
+	api.DELETE("/custom-rules/:id", handleDeleteCustomRule)
 
 	// 启动服务，默认监听 8080 端口
 	log.Println("Starting Clash Proxy Decoder backend on :8080...")
@@ -87,6 +105,188 @@ func CORSMiddleware() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// ---- Auth 相关逻辑 ----
+var SessionTokens sync.Map
+var captchaStore = base64Captcha.DefaultMemStore
+
+func AuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权的访问"})
+			return
+		}
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		if _, ok := SessionTokens.Load(token); !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "无效或已过期的凭证"})
+			return
+		}
+		c.Next()
+	}
+}
+
+func parseColor(s string) *color.RGBA {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "rgba") {
+		s = strings.ReplaceAll(s, " ", "")
+		var r, g, b uint8
+		var a float32
+		fmt.Sscanf(s, "rgba(%d,%d,%d,%f)", &r, &g, &b, &a)
+		return &color.RGBA{R: r, G: g, B: b, A: uint8(a * 255)}
+	} else if strings.HasPrefix(s, "#") {
+		s = strings.TrimPrefix(s, "#")
+		if len(s) == 6 {
+			var r, g, b uint8
+			fmt.Sscanf(s, "%02x%02x%02x", &r, &g, &b)
+			return &color.RGBA{R: r, G: g, B: b, A: 255}
+		}
+		if len(s) == 8 {
+			var r, g, b, a uint8
+			fmt.Sscanf(s, "%02x%02x%02x%02x", &r, &g, &b, &a)
+			return &color.RGBA{R: r, G: g, B: b, A: a}
+		}
+	}
+	return &color.RGBA{0, 0, 0, 0}
+}
+
+func handleVerify(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Token valid"})
+}
+
+func handleCheckInit(c *gin.Context) {
+	var count int64
+	DB.Model(&User{}).Count(&count)
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"data": gin.H{
+			"need_init": count == 0,
+		},
+	})
+}
+
+type InitRequest struct {
+	Username     string `json:"username" binding:"required"`
+	Password     string `json:"password" binding:"required"`
+	CaptchaId    string `json:"captcha_id"`
+	CaptchaValue string `json:"captcha_value"`
+}
+
+func handleInit(c *gin.Context) {
+	var count int64
+	DB.Model(&User{}).Count(&count)
+	if count > 0 {
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "系统已初始化，禁止重复操作"})
+		return
+	}
+
+	var req InitRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+
+	if AppConfig.Auth.CaptchaEnabled {
+		if req.CaptchaId == "" || req.CaptchaValue == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请输入验证码"})
+			return
+		}
+		if !captchaStore.Verify(req.CaptchaId, req.CaptchaValue, true) {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "验证码错误"})
+			return
+		}
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "密码加密失败"})
+		return
+	}
+
+	user := User{
+		Username: req.Username,
+		Password: string(hashedPassword),
+	}
+	if err := DB.Create(&user).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建管理员失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "管理员创建成功"})
+}
+
+func handleCaptcha(c *gin.Context) {
+	if !AppConfig.Auth.CaptchaEnabled {
+		c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"enabled": false}})
+		return
+	}
+	
+	driver := &base64Captcha.DriverMath{
+		Height:          AppConfig.Auth.CaptchaHeight,
+		Width:           AppConfig.Auth.CaptchaWidth,
+		NoiseCount:      0,
+		ShowLineOptions: 0,
+		BgColor:         parseColor(AppConfig.Auth.CaptchaBgColor),
+	}
+	cp := base64Captcha.NewCaptcha(driver, captchaStore)
+	id, b64s, _, err := cp.Generate()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成验证码失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"data": gin.H{
+			"enabled":    true,
+			"captcha_id": id,
+			"b64s":       b64s,
+			"text_color": AppConfig.Auth.CaptchaTextColor,
+		},
+	})
+}
+
+type LoginRequest struct {
+	Username     string `json:"username" binding:"required"`
+	Password     string `json:"password" binding:"required"`
+	CaptchaId    string `json:"captcha_id"`
+	CaptchaValue string `json:"captcha_value"`
+}
+
+func handleLogin(c *gin.Context) {
+	var req LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+
+	if AppConfig.Auth.CaptchaEnabled {
+		if req.CaptchaId == "" || req.CaptchaValue == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请输入验证码"})
+			return
+		}
+		if !captchaStore.Verify(req.CaptchaId, req.CaptchaValue, true) {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "验证码错误"})
+			return
+		}
+	}
+
+	var user User
+	if err := DB.Where("username = ?", req.Username).First(&user).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户名或密码错误"})
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户名或密码错误"})
+		return
+	}
+
+	token := uuid.New().String()
+	SessionTokens.Store(token, time.Now())
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "登录成功", "token": token})
+}
+
 
 // handleDecode 处理获取并解码请求
 func handleDecode(c *gin.Context) {

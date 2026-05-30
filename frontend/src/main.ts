@@ -8,6 +8,27 @@ import App from './App.vue'
 
 const app = createApp(App)
 
+import axios from 'axios'
+
+axios.interceptors.request.use(config => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+axios.interceptors.response.use(
+  response => response,
+  error => {
+    if (error.response && error.response.status === 401) {
+      localStorage.removeItem('token')
+      window.dispatchEvent(new CustomEvent('auth-failed'))
+    }
+    return Promise.reject(error)
+  }
+)
+
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component as any)
 }

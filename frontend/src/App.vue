@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Link, Edit, Delete } from "@element-plus/icons-vue";
+import { Link, Edit, Delete, Loading } from "@element-plus/icons-vue";
 import axios from "axios";
 import { Codemirror } from "vue-codemirror";
 import { yaml as codemirrorYaml } from "@codemirror/lang-yaml";
@@ -9,6 +9,15 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import jsYaml from "js-yaml";
+import Login from "./Login.vue";
+
+const isLoggedIn = ref(false);
+const isVerifying = ref(true);
+
+const onLoginSuccess = () => {
+  isLoggedIn.value = true;
+  fetchCustomData();
+};
 
 // CodeMirror 配置
 const cmExtensions = [
@@ -69,8 +78,22 @@ const fetchCustomData = async () => {
   }
 };
 
-onMounted(() => {
-  fetchCustomData();
+onMounted(async () => {
+  window.addEventListener('auth-failed', () => {
+    isLoggedIn.value = false;
+  });
+
+  const token = localStorage.getItem('token');
+  if (token) {
+    try {
+      await axios.get('http://localhost:8080/api/verify');
+      isLoggedIn.value = true;
+      fetchCustomData();
+    } catch {
+      localStorage.removeItem('token');
+    }
+  }
+  isVerifying.value = false;
 });
 
 // 节点接口定义
@@ -817,7 +840,11 @@ const isCustomRule = (row: any) => {
 </script>
 
 <template>
-  <div class="app-container">
+  <div v-if="isVerifying" class="app-loading">
+    <el-icon class="is-loading"><Loading /></el-icon>
+  </div>
+  <Login v-else-if="!isLoggedIn" @login-success="onLoginSuccess" />
+  <div v-else class="app-container">
     <!-- 头部精致毛玻璃导航栏 -->
     <header class="main-header glass-card">
       <div class="logo-wrapper">
@@ -2221,5 +2248,15 @@ const isCustomRule = (row: any) => {
 :deep(.glass-dropdown .el-select-group__title) {
   color: var(--color-primary) !important;
   font-weight: bold;
+}
+
+.app-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  font-size: 48px;
+  color: #38bdf8;
+  background-color: #0f172a;
 }
 </style>

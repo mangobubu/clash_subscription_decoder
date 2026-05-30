@@ -21,6 +21,24 @@ type Config struct {
 		SSLMode  string `toml:"sslmode"`
 		TimeZone string `toml:"timezone"`
 	} `toml:"database"`
+	Auth struct {
+		CaptchaEnabled bool   `toml:"captcha_enabled"`
+		CaptchaLength  int    `toml:"captcha_length"`
+		CaptchaWidth   int    `toml:"captcha_width"`
+		CaptchaHeight  int    `toml:"captcha_height"`
+		CaptchaBgColor string `toml:"captcha_bg_color"`
+		CaptchaTextColor string `toml:"captcha_text_color"`
+	} `toml:"auth"`
+}
+
+var DB *gorm.DB
+var AppConfig Config
+
+type User struct {
+	ID        uint   `gorm:"primarykey"`
+	Username  string `gorm:"uniqueIndex;not null"`
+	Password  string `gorm:"not null"`
+	CreatedAt int64  `gorm:"autoCreateTime"`
 }
 
 type CustomProxyGroup struct {
@@ -50,7 +68,7 @@ type CustomRule struct {
 	CreatedAt int64  `gorm:"autoCreateTime"`
 }
 
-var DB *gorm.DB
+
 
 func initDB() {
 	configData, err := os.ReadFile("config.toml")
@@ -63,6 +81,7 @@ func initDB() {
 	if err != nil {
 		log.Fatalf("Failed to unmarshal config.toml: %v", err)
 	}
+	AppConfig = cfg
 
 	passKey := string([]byte{'p', 'a', 's', 's', 'w', 'o', 'r', 'd'})
 	dsn := fmt.Sprintf(
@@ -82,7 +101,12 @@ func initDB() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	err = db.AutoMigrate(&CustomProxyGroup{}, &CustomNode{}, &CustomRule{})
+	err = db.AutoMigrate(
+		&User{},
+		&CustomProxyGroup{},
+		&CustomNode{},
+		&CustomRule{},
+	)
 	if err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
