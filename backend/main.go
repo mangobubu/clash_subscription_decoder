@@ -20,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/mojocn/base64Captcha"
+	"gorm.io/gorm"
 	"gopkg.in/yaml.v3"
 )
 
@@ -59,6 +60,10 @@ func main() {
 	api.GET("/verify", handleVerify)
 	api.POST("/logout", handleLogout)
 	api.POST("/change-password", handleChangePassword)
+
+	// 数据备份与导入恢复
+	api.GET("/backup", handleBackup)
+	api.POST("/import", handleImport)
 
 	// 注册解码接口
 	api.POST("/decode", handleDecode)
@@ -355,6 +360,90 @@ func handleChangePassword(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "密码修改成功，请使用新密码重新登录"})
 }
 
+type BackupData struct {
+	Groups []CustomProxyGroup `json:"groups"`
+	Nodes  []CustomNode       `json:"nodes"`
+	Rules  []CustomRule       `json:"rules"`
+}
+
+func handleBackup(c *gin.Context) {
+	var data BackupData
+	if err := DB.Find(&data.Groups).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取策略组失败"})
+		return
+	}
+	if err := DB.Find(&data.Nodes).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取节点失败"})
+		return
+	}
+	if err := DB.Find(&data.Rules).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取规则失败"})
+		return
+	}
+
+	jsonData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "JSON 序列化失败"})
+		return
+	}
+
+	c.Header("Content-Disposition", "attachment; filename=\"clash_proxy_backup.json\"")
+	c.Data(http.StatusOK, "application/json", jsonData)
+}
+
+func handleImport(c *gin.Context) {
+	var data BackupData
+	if err := c.ShouldBindJSON(&data); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "上传的 JSON 格式解析失败"})
+		return
+	}
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&CustomProxyGroup{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&CustomNode{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&CustomRule{}).Error; err != nil {
+			return err
+		}
+
+		for i := range data.Groups {
+			data.Groups[i].ID = 0
+		}
+		for i := range data.Nodes {
+			data.Nodes[i].ID = 0
+		}
+		for i := range data.Rules {
+			data.Rules[i].ID = 0
+		}
+
+		if len(data.Groups) > 0 {
+			if err := tx.Create(&data.Groups).Error; err != nil {
+				return err
+			}
+		}
+		if len(data.Nodes) > 0 {
+			if err := tx.Create(&data.Nodes).Error; err != nil {
+				return err
+			}
+		}
+		if len(data.Rules) > 0 {
+			if err := tx.Create(&data.Rules).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "导入失败，数据库事务已回滚: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "备份导入成功，全部数据已覆盖"})
+}
 
 // handleDecode 处理获取并解码请求
 func handleDecode(c *gin.Context) {

@@ -873,6 +873,50 @@ const passwordRules = {
   ],
 };
 
+const fileInputRef = ref<HTMLInputElement | null>(null);
+
+const handleFileUpload = async (event: any) => {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  try {
+    await ElMessageBox.confirm(
+      "此操作将不可逆地覆盖当前所有的自定义节点、策略组与分流规则，是否确认导入？",
+      "⚠️ 高危操作确认",
+      {
+        confirmButtonText: "确认覆盖并导入",
+        cancelButtonText: "取消",
+        type: "warning",
+        customClass: "glass-dialog",
+      }
+    );
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const json = JSON.parse(e.target?.result as string);
+        const res = await axios.post("http://localhost:8080/api/import", json);
+        if (res.data.code === 200) {
+          ElMessage.success(res.data.message || "备份导入成功！");
+          await fetchCustomData();
+        } else {
+          ElMessage.error(res.data.message || "导入失败");
+        }
+      } catch (err: any) {
+        ElMessage.error(
+          "文件解析或请求失败: " +
+            (err.response?.data?.message || err.message)
+        );
+      } finally {
+        if (fileInputRef.value) fileInputRef.value.value = "";
+      }
+    };
+    reader.readAsText(file);
+  } catch {
+    if (fileInputRef.value) fileInputRef.value.value = "";
+  }
+};
+
 const handleUserCommand = async (command: string) => {
   if (command === "logout") {
     try {
@@ -904,6 +948,27 @@ const handleUserCommand = async (command: string) => {
     changePasswordVisible.value = true;
     if (passwordFormRef.value) {
       passwordFormRef.value.resetFields();
+    }
+  } else if (command === "backupData") {
+    try {
+      const res = await axios.get("http://localhost:8080/api/backup", {
+        responseType: "blob",
+      });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `clash_proxy_backup_${new Date().getTime()}.json`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      ElMessage.success("数据备份已成功下载！");
+    } catch (error: any) {
+      ElMessage.error("数据备份失败");
+    }
+  } else if (command === "importData") {
+    if (fileInputRef.value) {
+      fileInputRef.value.click();
     }
   }
 };
@@ -972,13 +1037,24 @@ const submitChangePassword = async () => {
           </span>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="changePassword">修改密码</el-dropdown-item>
-              <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+              <el-dropdown-item command="backupData">⬇️ 备份数据</el-dropdown-item>
+              <el-dropdown-item command="importData">⬆️ 导入备份</el-dropdown-item>
+              <el-dropdown-item divided command="changePassword">🔑 修改密码</el-dropdown-item>
+              <el-dropdown-item divided command="logout">🚪 退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
       </div>
     </header>
+
+    <!-- 隐藏的导入文件上传组件 -->
+    <input 
+      type="file" 
+      ref="fileInputRef" 
+      accept=".json" 
+      style="display: none" 
+      @change="handleFileUpload" 
+    />
 
     <!-- 中部内容主体区 -->
     <main class="main-content">
