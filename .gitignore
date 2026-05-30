@@ -11,6 +11,7 @@ backend/tmp/
 backend/*.exe
 backend/server
 backend/tmp.exe
+backend/clash-proxy-backend
 
 # --- 前端依赖与编译产物 ---
 frontend/node_modules/
