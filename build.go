@@ -57,7 +57,7 @@ func main() {
 		fmt.Printf("❌ 前端依赖安装失败: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("✅ 前端依赖安装成功！\n")
+	fmt.Printf("✅ 前端依赖安装成功！\n\n")
 
 	// 4. 执行前端生产环境打包
 	fmt.Printf("🚀 正在编译前端静态资源 [%s run build]...\n", pm)
@@ -65,7 +65,7 @@ func main() {
 		fmt.Printf("❌ 前端打包失败: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("✅ 前端打包并直出至 backend/dist 成功！\n")
+	fmt.Printf("✅ 前端打包并直出至 backend/dist 成功！\n\n")
 
 	// 5. 执行后端 Go 二进制编译并输出到 release 目录
 	binaryName := "clash-proxy"
@@ -78,7 +78,7 @@ func main() {
 		fmt.Printf("❌ 后端编译失败: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("✅ 后端应用编译成功！\n")
+	fmt.Printf("✅ 后端应用编译成功！\n\n")
 
 	// 6. 自动拷贝并汇聚配置文件
 	fmt.Println("📝 正在进行运行配置的自动汇聚与保护...")
