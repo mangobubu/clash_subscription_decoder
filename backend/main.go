@@ -31,9 +31,9 @@ type DecodeRequest struct {
 
 // DecodeResponse 定义解码成功的响应结构
 type DecodeResponse struct {
-	URL       string `json:"url"`
-	RawBase64 string `json:"raw_base64"`
-	Decoded   string `json:"decoded"`
+	URL         string `json:"url"`
+	RawResponse string `json:"raw_response"`
+	Decoded     string `json:"decoded"`
 }
 
 func main() {
@@ -67,6 +67,9 @@ func main() {
 
 	// 注册解码接口
 	api.POST("/decode", handleDecode)
+	
+	// 注册获取最新订阅接口
+	api.GET("/subscription", handleGetSubscription)
 	
 	// 注册解析节点链接接口
 	api.POST("/parse-link", handleParseLink)
@@ -481,8 +484,8 @@ func handleDecode(c *gin.Context) {
 		targetURL = "https://" + targetURL
 	}
 
-	// 1. 发起请求获取远端 Base64 内容
-	rawBase64, err := fetchURLContent(targetURL)
+	// 1. 发起请求获取远端配置内容 (可能是 Base64 也可能是明文 YAML)
+	rawResponse, err := fetchURLContent(targetURL)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{
 			"code":    502,
@@ -494,17 +497,17 @@ func handleDecode(c *gin.Context) {
 
 	// 2. 尝试对内容进行健壮的 Base64 解码，如果是纯文本 YAML 则自动回退接纳
 	var decodedContent string
-	decoded, err := decodeAdaptiveBase64(rawBase64)
+	decoded, err := decodeAdaptiveBase64(rawResponse)
 	if err != nil {
 		// 也许它本身就是明文的配置文件 (如 YAML)? 我们判断一下有没有常见的配置特征 (KISS 原则: 灵活兼容)
-		if strings.Contains(rawBase64, "proxies:") || strings.Contains(rawBase64, "outbounds:") || strings.Contains(rawBase64, "servers:") {
-			decodedContent = rawBase64
+		if strings.Contains(rawResponse, "proxies:") || strings.Contains(rawResponse, "outbounds:") || strings.Contains(rawResponse, "servers:") {
+			decodedContent = rawResponse
 		} else {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{
 				"code":    422,
-				"message": "解析 Base64 失败，且不包含常见配置文件特征，目标地址返回的内容格式不支持",
+				"message": "解析失败，且不包含常见配置文件特征，目标地址返回的内容格式不支持",
 				"error":   err.Error(),
-				"preview": truncateString(rawBase64, 200), // 提供前200个字符用于排错
+				"preview": truncateString(rawResponse, 200), // 提供前200个字符用于排错
 			})
 			return
 		}
@@ -533,14 +536,41 @@ func handleDecode(c *gin.Context) {
 	// 🌟 AST 无损智能覆盖逻辑：自动将自定义分流规则优先注入并实现订阅规则覆盖去重
 	decodedContent = injectCustomRules(decodedContent)
 
+	// 保存至数据库 Subscription 表
+	var sub Subscription
+	if err := DB.Where("url = ?", targetURL).First(&sub).Error; err != nil {
+		sub = Subscription{URL: targetURL}
+	}
+	sub.RawResponse = rawResponse
+	sub.Decoded = decodedContent
+	DB.Save(&sub)
+
 	// 3. 成功返回
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "success",
 		"data": DecodeResponse{
-			URL:       targetURL,
-			RawBase64: truncateString(rawBase64, 1000), // 限制原始 Base64 返回长度，避免传输体过大
-			Decoded:   decodedContent,
+			URL:         targetURL,
+			RawResponse: truncateString(rawResponse, 1000), // 限制原始响应返回长度，避免传输体过大
+			Decoded:     decodedContent,
+		},
+	})
+}
+
+// handleGetSubscription 获取最新保存的订阅配置
+func handleGetSubscription(c *gin.Context) {
+	var sub Subscription
+	if err := DB.Order("updated_at desc").First(&sub).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "暂无保存的订阅"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"data": DecodeResponse{
+			URL:         sub.URL,
+			RawResponse: truncateString(sub.RawResponse, 1000),
+			Decoded:     sub.Decoded,
 		},
 	})
 }

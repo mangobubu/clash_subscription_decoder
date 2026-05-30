@@ -14,9 +14,10 @@ import Login from "./Login.vue";
 const isLoggedIn = ref(false);
 const isVerifying = ref(true);
 
-const onLoginSuccess = () => {
+const onLoginSuccess = async () => {
   isLoggedIn.value = true;
-  fetchCustomData();
+  await fetchCustomData();
+  await loadSubscription();
 };
 
 // CodeMirror 配置
@@ -32,9 +33,28 @@ const inputUrl = ref("");
 const isLoading = ref(false);
 const activeTab = ref("nodes");
 const errorMsg = ref("");
-const result = ref<{ url: string; raw_base64: string; decoded: string } | null>(
+const hasSubscription = ref(false);
+const result = ref<{ url: string; raw_response: string; decoded: string } | null>(
   null,
 );
+
+const loadSubscription = async () => {
+  try {
+    const res = await axios.get("http://localhost:8080/api/subscription");
+    if (res.data.code === 200 && res.data.data) {
+      inputUrl.value = res.data.data.url;
+      result.value = res.data.data;
+      hasSubscription.value = true;
+      if (parsedNodes.value.length > 0) {
+        activeTab.value = "nodes";
+      } else {
+        activeTab.value = "text";
+      }
+    }
+  } catch (e) {
+    // 暂无保存的订阅，正常跳过
+  }
+};
 
 // ---------------------- 自定义资源字典状态 ----------------------
 const customNodesDict = ref<Record<string, any>>({});
@@ -88,7 +108,8 @@ onMounted(async () => {
     try {
       await axios.get('http://localhost:8080/api/verify');
       isLoggedIn.value = true;
-      fetchCustomData();
+      await fetchCustomData();
+      await loadSubscription();
     } catch {
       localStorage.removeItem('token');
     }
@@ -136,6 +157,7 @@ const handleDecode = async () => {
     });
     if (response.data && response.data.code === 200) {
       result.value = response.data.data;
+      hasSubscription.value = true;
       await fetchCustomData();
       ElMessage.success("成功拉取并完成 Base64 解码！");
       // 如果解析出来的节点数大于0，默认跳到 nodes 页签，否则跳到 text
@@ -1083,6 +1105,16 @@ const submitChangePassword = async () => {
 
           <div class="button-group">
             <el-button
+              v-if="hasSubscription"
+              type="success"
+              @click="handleDecode"
+              :loading="isLoading"
+              class="action-btn"
+            >
+              刷新订阅
+            </el-button>
+            <el-button
+              v-else
               type="primary"
               @click="handleDecode"
               :loading="isLoading"
@@ -1538,14 +1570,14 @@ const submitChangePassword = async () => {
               </div>
             </el-tab-pane>
 
-            <!-- 原始 Base64 页签 -->
+            <!-- 原始响应数据页签 -->
             <el-tab-pane name="raw">
               <template #label>
-                <span class="tab-label">🔗 原始 Base64 截断</span>
+                <span class="tab-label">🔗 原始响应截断</span>
               </template>
               <div class="code-wrapper">
                 <div class="code-container raw-base64-text">
-                  {{ result.raw_base64 }}
+                  {{ result.raw_response }}
                 </div>
               </div>
             </el-tab-pane>

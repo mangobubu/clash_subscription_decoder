@@ -68,6 +68,15 @@ type CustomRule struct {
 	CreatedAt int64  `gorm:"autoCreateTime"`
 }
 
+type Subscription struct {
+	ID        uint   `gorm:"primarykey"`
+	URL         string `gorm:"uniqueIndex;not null"`
+	RawResponse string `gorm:"type:text"`
+	Decoded     string `gorm:"type:text"`
+	CreatedAt int64  `gorm:"autoCreateTime"`
+	UpdatedAt int64  `gorm:"autoUpdateTime"`
+}
+
 
 
 func initDB() {
@@ -106,6 +115,7 @@ func initDB() {
 		&CustomProxyGroup{},
 		&CustomNode{},
 		&CustomRule{},
+		&Subscription{},
 	)
 	if err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
