@@ -131,27 +131,28 @@ pnpm dev
 ```
 The frontend application will be served at `http://localhost:5173`. The local development setup is pre-configured with a Vite reverse proxy to forward `/api` requests to backend APIs at `http://localhost:8080/api`.
 
-### 4. Production Build
+### 4. Production Build & One-File Deployment
 
-#### Frontend Build
-In the frontend directory, compile the static resources into an optimized production bundle:
+The system supports **single-file full-stack deployment**. When compiling the Go backend, all frontend static assets are statically embedded into the executable binary. In your production environment, you only need to run the single compiled binary.
+
+#### Step 1: Build Frontend
+Run the build command in the frontend directory. The compiled static resources will be automatically exported directly to the backend embedding folder `backend/dist`:
 ```bash
 cd frontend
 pnpm build
 ```
-A `dist` directory will be generated upon completion, which can be directly hosted via high-performance web servers such as Nginx.
 
-#### Backend Build
-In the backend directory, compile the Go project into a single, high-concurrency executable binary:
+#### Step 2: Compile & Run Backend
+Compile the Go project in the backend directory. This will merge the compiled frontend assets together with the Go application code into the final executable:
 ```bash
 cd backend
-# Compile to binary (clash-proxy.exe on Windows automatically)
+# Compile into an executable binary with embedded frontend (Windows will generate clash-proxy.exe automatically)
 go build -o clash-proxy
 
-# Run the compiled binary
+# Run the full-stack server
 ./clash-proxy
 ```
-After successful compilation, you only need to deploy the generated executable binary along with the `gorm.db` file (if already initialized) on your production server.
+Once started, visit `http://localhost:8080` in your browser to access both the administrative web interface and the background APIs instantly. No need to deploy frontend assets separately via Nginx or other web servers!
 
 ---
 

@@ -19,6 +19,11 @@ frontend/dist/
 frontend/dist-ssr/
 frontend/*.local
 
+# --- 后端静态资源打包产物（只保留编译占位符，忽略编译产生的大型资源） ---
+backend/dist/*
+!backend/dist/index.html
+
+
 # --- 运行日志 ---
 logs
 *.log
