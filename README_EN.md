@@ -133,19 +133,27 @@ The frontend application will be served at `http://localhost:5173`. The local de
 
 ### 4. Production Build & One-File Deployment
 
-The system supports **single-file full-stack deployment**. To simplify the building workflow, the project includes an automated, cross-platform build utility written in pure Go. When compiling the Go backend, all frontend static assets are statically embedded into the executable binary. In your production environment, you only need to run the single compiled binary.
+The system supports **one-stop full-stack automated packaging**. To provide you with the most frictionless deployment experience, the project includes a cross-platform build utility written in pure Go. Once the build completes, all operational assets (including the standalone executable binary with fully embedded frontend and the default configuration file) will be automatically gathered into the unified **`release`** output directory at the project root.
 
 #### Step 1: One-Click Full-Stack Build
-You do not need to install packages or copy resources manually. Simply run the following command in the project **root directory**. The build system will automatically discover your local package manager (prioritizing `pnpm`, falling back to `npm` if not found), pull dependencies, build frontend assets, and compile the Go backend:
+You do not need to compile frontend and backend separately, nor do you need to manually copy any configuration files. Simply run the following command in the project **root directory**:
 ```bash
 go run build.go
 ```
+The build system will automatically discover your local package manager (prioritizing `pnpm`, falling back to `npm` if not found), install frontend packages, build production assets, compile the Go application, and consolidate everything inside the `release` folder.
 
 #### Step 2: Run Full-Stack Server
-Upon successful compilation, the final standalone executable binary will be generated in the `backend` directory:
+Upon successful compilation, you only need to copy the **`release`** folder to your production server. The folder layout is structured as follows:
+```text
+release/
+├── clash-proxy         # Standalone executable with embedded frontend (clash-proxy.exe on Windows)
+├── config.toml         # Generated initial configuration file (protected, subsequent builds will not overwrite your edits)
+└── config.example.toml # Backup configuration template
+```
+Navigate to the directory and run the executable to launch the full-stack server instantly:
 ```bash
-cd backend
-# Run the full-stack server (filename will be clash-proxy.exe on Windows)
+cd release
+# Run the full-stack server (filename will be ./clash-proxy.exe on Windows)
 ./clash-proxy
 ```
 Once started, visit `http://localhost:8080` in your browser to access both the administrative web interface and the background APIs instantly. No need to deploy frontend assets separately via Nginx or other web servers!

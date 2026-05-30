@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,11 +23,18 @@ func main() {
 
 	frontendDir := filepath.Join(wd, "frontend")
 	backendDir := filepath.Join(wd, "backend")
+	releaseDir := filepath.Join(wd, "release")
 
 	// 验证前后端文件夹是否存在
 	if !dirExists(frontendDir) || !dirExists(backendDir) {
 		fmt.Println("❌ 错误: 未能在当前目录下找到 'frontend' 或 'backend' 文件夹！")
 		fmt.Println("💡 请确保您在 clash-proxy 项目根目录下运行此脚本。")
+		os.Exit(1)
+	}
+
+	// 自动创建 release 产物目录
+	if err := os.MkdirAll(releaseDir, 0755); err != nil {
+		fmt.Printf("❌ 创建 release 产物目录失败: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -59,22 +67,48 @@ func main() {
 	}
 	fmt.Println("✅ 前端打包并直出至 backend/dist 成功！\n")
 
-	// 5. 执行后端 Go 二进制编译
+	// 5. 执行后端 Go 二进制编译并输出到 release 目录
 	binaryName := "clash-proxy"
 	if runtime.GOOS == "windows" {
 		binaryName = "clash-proxy.exe"
 	}
-	binaryPath := filepath.Join(backendDir, binaryName)
-	fmt.Printf("🔨 正在编译 Go 后端应用 [go build -o backend/%s]...\n", binaryName)
-	if err := runCommand(backendDir, "go", "build", "-o", binaryName); err != nil {
+	binaryPath := filepath.Join(releaseDir, binaryName)
+	fmt.Printf("🔨 正在编译 Go 后端应用，并汇聚至 release/%s...\n", binaryName)
+	if err := runCommand(backendDir, "go", "build", "-o", filepath.Join("../release", binaryName)); err != nil {
 		fmt.Printf("❌ 后端编译失败: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Println("✅ 后端应用编译成功！\n")
+
+	// 6. 自动拷贝并汇聚配置文件
+	fmt.Println("📝 正在进行运行配置的自动汇聚与保护...")
+	exampleSrc := filepath.Join(backendDir, "config.example.toml")
+	exampleDst := filepath.Join(releaseDir, "config.example.toml")
+	
+	// 拷贝一份 config.example.toml 方便备份与查阅
+	if err := copyFile(exampleSrc, exampleDst); err != nil {
+		fmt.Printf("⚠️  复制 config.example.toml 失败: %v\n", err)
+	} else {
+		fmt.Println("  - 已同步备份 [config.example.toml] 至 release 目录")
+	}
+
+	// 自动创建初始的 config.toml
+	configDst := filepath.Join(releaseDir, "config.toml")
+	if _, err := os.Stat(configDst); os.IsNotExist(err) {
+		if err := copyFile(exampleSrc, configDst); err != nil {
+			fmt.Printf("⚠️  自动生成初始 config.toml 失败: %v\n", err)
+		} else {
+			fmt.Println("  - 🌟 已自动为您生成全新的初始配置文件 [config.toml]！")
+		}
+	} else {
+		fmt.Println("  - ℹ️  检测到已存在 [config.toml]，已安全跳过覆盖，全力保障您本地数据库配置的完整性")
+	}
 
 	fmt.Println("\n==================================================")
-	fmt.Println("🎉 全栈单二进制文件编译成功！")
+	fmt.Println("🎉 全栈独立产物目录构建成功！")
 	fmt.Printf("👉 产物位置: %s\n", binaryPath)
-	fmt.Println("💡 您仅需运行此文件即可拉起包含全量前端的完整系统！")
+	fmt.Printf("👉 部署目录: %s\n", releaseDir)
+	fmt.Println("💡 提示: 您仅需整体拷贝该 release 目录即可前往任何服务器一键部署！")
 	fmt.Println("==================================================")
 }
 
@@ -85,6 +119,24 @@ func dirExists(path string) bool {
 		return false
 	}
 	return info.IsDir()
+}
+
+// copyFile 复制文件辅助函数
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, sourceFile)
+	return err
 }
 
 // runCommand 跨平台执行命令的通用封装
