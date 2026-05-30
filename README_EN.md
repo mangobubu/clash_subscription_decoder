@@ -131,6 +131,28 @@ pnpm dev
 ```
 The frontend application will be served at `http://localhost:5173`. The local development setup is pre-configured with a Vite reverse proxy to forward `/api` requests to backend APIs at `http://localhost:8080/api`.
 
+### 4. Production Build
+
+#### Frontend Build
+In the frontend directory, compile the static resources into an optimized production bundle:
+```bash
+cd frontend
+pnpm build
+```
+A `dist` directory will be generated upon completion, which can be directly hosted via high-performance web servers such as Nginx.
+
+#### Backend Build
+In the backend directory, compile the Go project into a single, high-concurrency executable binary:
+```bash
+cd backend
+# Compile to binary (clash-proxy.exe on Windows automatically)
+go build -o clash-proxy
+
+# Run the compiled binary
+./clash-proxy
+```
+After successful compilation, you only need to deploy the generated executable binary along with the `gorm.db` file (if already initialized) on your production server.
+
 ---
 
 ## 📖 User Guide

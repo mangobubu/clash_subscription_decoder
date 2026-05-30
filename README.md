@@ -131,6 +131,28 @@ pnpm dev
 ```
 前端服务默认运行于：`http://localhost:5173`。前端已配置了 Vite 反向代理，会自动将 `/api` 的请求转发至后端的 `http://localhost:8080/api`。
 
+### 4. 生产环境构建
+
+#### 前端构建
+在前端目录下运行以下命令，将静态资源打包成高效的生产包：
+```bash
+cd frontend
+pnpm build
+```
+打包完成后会在 `frontend` 目录下生成 `dist` 文件夹，该文件夹可直接使用 Nginx 等 Web 服务器进行静态托管。
+
+#### 后端构建
+在后端目录下运行以下命令，将 Go 项目编译成单个高并发的可执行二进制文件：
+```bash
+cd backend
+# 编译生成可执行文件 (Windows 环境下会自动生成 clash-proxy.exe)
+go build -o clash-proxy
+
+# 运行可执行二进制文件
+./clash-proxy
+```
+编译成功后，在生产服务器上仅需携带生成的二进制文件与同级目录下的 `gorm.db`（若存在）即可运行服务。
+
 ---
 
 ## 📖 使用指南
