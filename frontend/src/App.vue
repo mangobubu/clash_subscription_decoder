@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Link, Edit, Delete } from '@element-plus/icons-vue'
 import axios from 'axios'
 import { Codemirror } from 'vue-codemirror'
 import { yaml as codemirrorYaml } from '@codemirror/lang-yaml'
@@ -23,6 +24,36 @@ const isLoading = ref(false)
 const activeTab = ref('nodes')
 const errorMsg = ref('')
 const result = ref<{ url: string; raw_base64: string; decoded: string } | null>(null)
+
+// ---------------------- 自定义资源字典状态 ----------------------
+const customNodesDict = ref<Record<string, any>>({})
+const customGroupsDict = ref<Record<string, any>>({})
+
+const fetchCustomData = async () => {
+  try {
+    const [nodesRes, groupsRes] = await Promise.all([
+      axios.get('http://localhost:8080/api/custom-nodes'),
+      axios.get('http://localhost:8080/api/custom-groups')
+    ])
+    const nDict: Record<string, any> = {}
+    if (nodesRes.data.code === 200) {
+      nodesRes.data.data.forEach((n: any) => nDict[n.Name || n.name] = n)
+    }
+    customNodesDict.value = nDict
+
+    const gDict: Record<string, any> = {}
+    if (groupsRes.data.code === 200) {
+      groupsRes.data.data.forEach((g: any) => gDict[g.Name || g.name] = g)
+    }
+    customGroupsDict.value = gDict
+  } catch(e) {
+    console.error('获取自定义数据失败', e)
+  }
+}
+
+onMounted(() => {
+  fetchCustomData()
+})
 
 // 节点接口定义
 interface ProxyNode {
@@ -62,6 +93,7 @@ const handleDecode = async () => {
     const response = await axios.post('http://localhost:8080/api/decode', { url })
     if (response.data && response.data.code === 200) {
       result.value = response.data.data
+      await fetchCustomData()
       ElMessage.success('成功拉取并完成 Base64 解码！')
       // 如果解析出来的节点数大于0，默认跳到 nodes 页签，否则跳到 text
       if (parsedNodes.value.length > 0) {
@@ -227,17 +259,59 @@ const handleDownload = () => {
 // ---------------------- 自定义组管理逻辑 ----------------------
 const groupDialogVisible = ref(false)
 const isSubmittingGroup = ref(false)
+const editingGroupId = ref<number | null>(null)
+
 const newGroupForm = ref({
   name: '',
   type: 'select',
-  proxies: [] as string[]
+  proxies: [] as string[],
+  exclude: ''
 })
 
-const groupTypes = ['select', 'url-test', 'fallback', 'load-balance', 'relay']
+const groupTypes = ['select', 'url-test', 'fallback', 'load-balance']
 
 const openGroupDialog = () => {
-  newGroupForm.value = { name: '', type: 'select', proxies: [] }
+  editingGroupId.value = null
+  newGroupForm.value = { name: '', type: 'select', proxies: [], exclude: '' }
   groupDialogVisible.value = true
+}
+
+const editCustomGroup = (groupName: string) => {
+  const customInfo = customGroupsDict.value[groupName]
+  if (!customInfo) return
+  editingGroupId.value = customInfo.ID
+  let proxiesList: string[] = []
+  try { proxiesList = JSON.parse(customInfo.Proxies || '[]') } catch(e){}
+  newGroupForm.value = {
+    name: customInfo.Name || customInfo.name,
+    type: customInfo.Type || customInfo.type,
+    proxies: proxiesList,
+    exclude: customInfo.Exclude || customInfo.exclude || ''
+  }
+  groupDialogVisible.value = true
+}
+
+const deleteCustomGroup = (groupName: string) => {
+  const customInfo = customGroupsDict.value[groupName]
+  if (!customInfo) return
+  ElMessageBox.confirm(`确定要删除自定义策略组 [${groupName}] 吗？`, '安全提示', {
+    confirmButtonText: '确定删除',
+    cancelButtonText: '取消',
+    type: 'warning'
+  }).then(async () => {
+    try {
+      const res = await axios.delete(`http://localhost:8080/api/custom-groups/${customInfo.ID}`)
+      if (res.data.code === 200) {
+        ElMessage.success('自定义策略组已成功删除！')
+        await fetchCustomData()
+        if (inputUrl.value) {
+          await handleDecode()
+        }
+      }
+    } catch(err: any) {
+      ElMessage.error('删除失败: ' + err.message)
+    }
+  }).catch(() => {})
 }
 
 const selectAllNodes = () => {
@@ -267,10 +341,16 @@ const saveCustomGroup = async () => {
 
   isSubmittingGroup.value = true
   try {
-    const res = await axios.post('http://localhost:8080/api/custom-groups', newGroupForm.value)
+    let res;
+    if (editingGroupId.value) {
+      res = await axios.put(`http://localhost:8080/api/custom-groups/${editingGroupId.value}`, newGroupForm.value)
+    } else {
+      res = await axios.post('http://localhost:8080/api/custom-groups', newGroupForm.value)
+    }
     if (res.data.code === 200) {
-      ElMessage.success('自定义组已云端保存成功！')
+      ElMessage.success(editingGroupId.value ? '自定义组更新成功！' : '自定义组已云端保存成功！')
       groupDialogVisible.value = false
+      await fetchCustomData()
       if (inputUrl.value) {
         await handleDecode()
       }
@@ -289,6 +369,7 @@ const nodeDialogVisible = ref(false)
 const nodeActiveTab = ref('link')
 const isParsingLink = ref(false)
 const isSubmittingNode = ref(false)
+const editingNodeId = ref<number | null>(null)
 
 const nodeLinkForm = ref({
   link: ''
@@ -302,7 +383,7 @@ const newNodeForm = ref({
   config: {} as Record<string, any>
 })
 
-const nodeTypes = ['vless', 'hysteria2', 'ss', 'vmess', 'trojan']
+const nodeTypes = ['vless', 'hysteria2', 'ss', 'vmess', 'trojan', 'socks5']
 
 const configString = computed({
   get: () => JSON.stringify(newNodeForm.value.config, null, 2),
@@ -316,10 +397,51 @@ const configString = computed({
 })
 
 const openNodeDialog = () => {
+  editingNodeId.value = null
   nodeLinkForm.value.link = ''
   newNodeForm.value = { name: '', type: 'vless', server: '', port: 443, config: {} }
   nodeDialogVisible.value = true
   nodeActiveTab.value = 'link'
+}
+
+const editCustomNode = (nodeName: string) => {
+  const customInfo = customNodesDict.value[nodeName]
+  if (!customInfo) return
+  editingNodeId.value = customInfo.ID
+  let configMap: Record<string, any> = {}
+  try { configMap = JSON.parse(customInfo.Config || '{}') } catch(e){}
+  newNodeForm.value = {
+    name: customInfo.Name || customInfo.name,
+    type: customInfo.Type || customInfo.type,
+    server: customInfo.Server || customInfo.server,
+    port: customInfo.Port || customInfo.port,
+    config: configMap
+  }
+  nodeActiveTab.value = 'manual'
+  nodeDialogVisible.value = true
+}
+
+const deleteCustomNode = (nodeName: string) => {
+  const customInfo = customNodesDict.value[nodeName]
+  if (!customInfo) return
+  ElMessageBox.confirm(`确定要彻底删除自定义节点 [${nodeName}] 吗？`, '安全提示', {
+    confirmButtonText: '立即销毁',
+    cancelButtonText: '取消保留',
+    type: 'warning'
+  }).then(async () => {
+    try {
+      const res = await axios.delete(`http://localhost:8080/api/custom-nodes/${customInfo.ID}`)
+      if (res.data.code === 200) {
+        ElMessage.success('自定义节点已被彻底删除！')
+        await fetchCustomData()
+        if (inputUrl.value) {
+          await handleDecode()
+        }
+      }
+    } catch(err: any) {
+      ElMessage.error('删除节点失败: ' + err.message)
+    }
+  }).catch(() => {})
 }
 
 const parseNodeLink = async () => {
@@ -363,10 +485,16 @@ const saveCustomNode = async () => {
   newNodeForm.value.config.port = newNodeForm.value.port
 
   try {
-    const res = await axios.post('http://localhost:8080/api/custom-nodes', newNodeForm.value)
+    let res;
+    if (editingNodeId.value) {
+      res = await axios.put(`http://localhost:8080/api/custom-nodes/${editingNodeId.value}`, newNodeForm.value)
+    } else {
+      res = await axios.post('http://localhost:8080/api/custom-nodes', newNodeForm.value)
+    }
     if (res.data.code === 200) {
-      ElMessage.success('自定义节点云端保存成功！')
+      ElMessage.success(editingNodeId.value ? '自定义节点更新成功！' : '自定义节点云端保存成功！')
       nodeDialogVisible.value = false
+      await fetchCustomData()
       if (inputUrl.value) {
         await handleDecode()
       }
@@ -504,8 +632,14 @@ const saveCustomNode = async () => {
               <div class="nodes-grid">
                 <div v-for="(node, idx) in parsedNodes" :key="idx" class="node-card">
                   <div class="node-card-header">
-                    <span class="node-flag">{{ getFlagEmoji(node.name) }}</span>
-                    <span class="node-name" :title="node.name">{{ node.name }}</span>
+                    <div style="display: flex; align-items: center; overflow: hidden; flex: 1;">
+                      <span class="node-flag">{{ getFlagEmoji(node.name) }}</span>
+                      <span class="node-name" :title="node.name">{{ node.name }}</span>
+                    </div>
+                    <div v-if="customNodesDict[node.name]" class="custom-actions" style="display: flex; gap: 4px;">
+                      <el-button type="primary" link :icon="Edit" @click="editCustomNode(node.name)" title="编辑云端节点"></el-button>
+                      <el-button type="danger" link :icon="Delete" @click="deleteCustomNode(node.name)" title="删除云端节点"></el-button>
+                    </div>
                   </div>
                   <div class="node-card-body">
                     <div class="node-info-row">
@@ -547,8 +681,14 @@ const saveCustomNode = async () => {
               <div class="groups-grid">
                 <div v-for="(group, idx) in proxyGroups" :key="idx" class="group-card">
                   <div class="group-card-header">
-                    <span class="group-name">{{ group.name }}</span>
-                    <el-tag size="small" type="primary" effect="dark" class="group-type-tag">{{ group.type }}</el-tag>
+                    <div style="display: flex; align-items: center; overflow: hidden; flex: 1; gap: 8px;">
+                      <span class="group-name">{{ group.name }}</span>
+                      <el-tag size="small" type="primary" effect="dark" class="group-type-tag">{{ group.type }}</el-tag>
+                    </div>
+                    <div v-if="customGroupsDict[group.name]" class="custom-actions" style="display: flex; gap: 4px;">
+                      <el-button type="primary" link :icon="Edit" @click="editCustomGroup(group.name)" title="编辑策略组"></el-button>
+                      <el-button type="danger" link :icon="Delete" @click="deleteCustomGroup(group.name)" title="删除策略组"></el-button>
+                    </div>
                   </div>
                   <div class="group-card-body">
                     <el-tag 
@@ -652,7 +792,7 @@ const saveCustomNode = async () => {
     <!-- 自定义策略组弹窗 -->
     <el-dialog 
       v-model="groupDialogVisible" 
-      title="✨ 新增云端自定义策略组" 
+      :title="editingGroupId ? '✨ 编辑云端自定义策略组' : '✨ 新增云端自定义策略组'" 
       width="550px" 
       class="glass-dialog"
     >
@@ -691,11 +831,17 @@ const saveCustomNode = async () => {
             </el-option-group>
           </el-select>
         </el-form-item>
+        <el-form-item label="排除节点关键字或正则 (Exclude) - 极简可选">
+          <el-input v-model="newGroupForm.exclude" placeholder="例如：特殊专线" clearable></el-input>
+          <p style="font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">
+            仅当您有特殊的跨组排除需求时（如特定节点总是断流），才在此处填入正则表达式。
+          </p>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="groupDialogVisible = false" plain>取消</el-button>
         <el-button type="primary" @click="saveCustomGroup" :loading="isSubmittingGroup">
-          保存并立即云端同步
+          {{ editingGroupId ? '更新并立即云端同步' : '保存并立即云端同步' }}
         </el-button>
       </template>
     </el-dialog>
@@ -703,7 +849,7 @@ const saveCustomNode = async () => {
     <!-- 自定义节点弹窗 -->
     <el-dialog 
       v-model="nodeDialogVisible" 
-      title="✨ 新增云端自定义节点" 
+      :title="editingNodeId ? '✨ 编辑云端自定义节点' : '✨ 新增云端自定义节点'" 
       width="600px" 
       class="glass-dialog"
     >
@@ -711,7 +857,7 @@ const saveCustomNode = async () => {
         <el-tab-pane label="🔗 链接智能导入" name="link">
           <div style="padding: 10px 0;">
             <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 14px;">
-              支持自动解析 vless://, hysteria2://, ss:// 等分享链接，一键提取核心参数。
+              支持自动解析 vless://, hysteria2://, ss://, socks5:// 等分享链接，一键提取核心参数。
             </p>
             <el-input 
               v-model="nodeLinkForm.link" 
@@ -741,6 +887,26 @@ const saveCustomNode = async () => {
             <el-form-item label="端口">
               <el-input-number v-model="newNodeForm.port" :min="1" :max="65535" style="width: 100%"></el-input-number>
             </el-form-item>
+            <el-form-item label="前置拨号 (dialer-proxy)">
+              <el-select 
+                v-model="newNodeForm.config['dialer-proxy']" 
+                clearable 
+                filterable 
+                placeholder="（可选）选择前置代理名，留空则直连"
+                style="width: 100%"
+                popper-class="glass-dropdown"
+              >
+                <el-option-group label="现有策略组">
+                  <el-option v-for="g in proxyGroups" :key="g.name" :label="g.name" :value="g.name" />
+                </el-option-group>
+                <el-option-group label="现有独立节点">
+                  <el-option v-for="n in parsedNodes" :key="n.name" :label="n.name" :value="n.name" />
+                </el-option-group>
+              </el-select>
+              <p style="font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">
+                最新内核移除了 relay，链式代理现由前置拨号 (dialer-proxy) 原生接管。
+              </p>
+            </el-form-item>
             <el-form-item label="详细配置">
               <p style="font-size: 12px; color: var(--text-secondary); margin-top: 0; line-height: 1.4;">
                 高级参数（如 uuid, tls, network 等），将作为 JSON 对象合并到该节点配置中。<br/>
@@ -758,7 +924,7 @@ const saveCustomNode = async () => {
           <div style="margin-top: 20px; text-align: right;">
             <el-button @click="nodeDialogVisible = false" plain>取消</el-button>
             <el-button type="success" @click="saveCustomNode" :loading="isSubmittingNode">
-              确认并存入云端
+              {{ editingNodeId ? '确认并更新云端' : '确认并存入云端' }}
             </el-button>
           </div>
         </el-tab-pane>

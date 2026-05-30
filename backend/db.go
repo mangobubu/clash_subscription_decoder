@@ -28,6 +28,7 @@ type CustomProxyGroup struct {
 	Name      string `gorm:"uniqueIndex;not null"`
 	Type      string `gorm:"not null"`
 	Proxies   string `gorm:"type:text;not null"` // JSON array of string
+	Exclude   string `gorm:"type:text"`          // 排除关键字或正则表达式
 	CreatedAt int64  `gorm:"autoCreateTime"`
 }
 

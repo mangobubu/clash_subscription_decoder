@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -48,11 +49,14 @@ func main() {
 	// 注册自定义节点 CRUD 接口
 	r.GET("/api/custom-nodes", handleGetCustomNodes)
 	r.POST("/api/custom-nodes", handleCreateCustomNode)
+	r.PUT("/api/custom-nodes/:id", handleUpdateCustomNode)
 	r.DELETE("/api/custom-nodes/:id", handleDeleteCustomNode)
 
 	// 注册自定义组 CRUD 接口
 	r.GET("/api/custom-groups", handleGetCustomGroups)
 	r.POST("/api/custom-groups", handleCreateCustomGroup)
+	r.PUT("/api/custom-groups/:id", handleUpdateCustomGroup)
+	r.DELETE("/api/custom-groups/:id", handleDeleteCustomGroup)
 
 	// 启动服务，默认监听 8080 端口
 	log.Println("Starting Clash Proxy Decoder backend on :8080...")
@@ -191,6 +195,7 @@ func handleCreateCustomGroup(c *gin.Context) {
 		Name    string   `json:"name"`
 		Type    string   `json:"type"`
 		Proxies []string `json:"proxies"`
+		Exclude string   `json:"exclude"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
@@ -202,12 +207,56 @@ func handleCreateCustomGroup(c *gin.Context) {
 		Name:    req.Name,
 		Type:    req.Type,
 		Proxies: string(proxiesBytes),
+		Exclude: req.Exclude,
 	}
 	if err := DB.Create(&group).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存失败", "error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "保存成功", "data": group})
+}
+
+// handleUpdateCustomGroup 更新策略组
+func handleUpdateCustomGroup(c *gin.Context) {
+	id := c.Param("id")
+	var req struct {
+		Name    string   `json:"name"`
+		Type    string   `json:"type"`
+		Proxies []string `json:"proxies"`
+		Exclude string   `json:"exclude"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+
+	proxiesBytes, _ := json.Marshal(req.Proxies)
+	var group CustomProxyGroup
+	if err := DB.First(&group, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "代理组不存在"})
+		return
+	}
+
+	group.Name = req.Name
+	group.Type = req.Type
+	group.Proxies = string(proxiesBytes)
+	group.Exclude = req.Exclude
+
+	if err := DB.Save(&group).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新失败", "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "更新成功", "data": group})
+}
+
+// handleDeleteCustomGroup 删除自定义组
+func handleDeleteCustomGroup(c *gin.Context) {
+	id := c.Param("id")
+	if err := DB.Delete(&CustomProxyGroup{}, id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除失败", "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功"})
 }
 
 // handleParseLink 处理节点链接解析
@@ -276,6 +325,41 @@ func handleDeleteCustomNode(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功"})
+}
+
+// handleUpdateCustomNode 更新自定义节点
+func handleUpdateCustomNode(c *gin.Context) {
+	id := c.Param("id")
+	var req struct {
+		Name   string                 `json:"name"`
+		Type   string                 `json:"type"`
+		Server string                 `json:"server"`
+		Port   int                    `json:"port"`
+		Config map[string]interface{} `json:"config"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+
+	configBytes, _ := json.Marshal(req.Config)
+	var node CustomNode
+	if err := DB.First(&node, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "节点不存在"})
+		return
+	}
+
+	node.Name = req.Name
+	node.Type = req.Type
+	node.Server = req.Server
+	node.Port = req.Port
+	node.Config = string(configBytes)
+
+	if err := DB.Save(&node).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新失败", "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "更新成功", "data": node})
 }
 
 // injectCustomNodes 基于 yaml.v3 的 Node 树完成自定义节点的注入
@@ -367,11 +451,13 @@ func injectCustomGroups(yamlContent string) string {
 		return yamlContent
 	}
 
-	// 提取所有的 proxies 名称以备 "ALL_NODES" 使用
+	// 提取所有的 proxies 节点以备使用
+	var proxiesNode *yaml.Node
 	var allNodeNames []string
 	for i := 0; i < len(docNode.Content); i += 2 {
 		if docNode.Content[i].Value == "proxies" {
-			seq := docNode.Content[i+1]
+			proxiesNode = docNode.Content[i+1]
+			seq := proxiesNode
 			if seq.Kind == yaml.SequenceNode {
 				for _, proxyNode := range seq.Content {
 					if proxyNode.Kind == yaml.MappingNode {
@@ -415,8 +501,25 @@ func injectCustomGroups(yamlContent string) string {
 			}
 		}
 
-		proxiesSeq := &yaml.Node{Kind: yaml.SequenceNode}
+		var filteredProxies []string
+		var excludeRegex *regexp.Regexp
+		if cg.Exclude != "" {
+			excludeRegex, _ = regexp.Compile(cg.Exclude)
+		}
+
+		seen := make(map[string]bool)
 		for _, p := range finalProxies {
+			if excludeRegex != nil && excludeRegex.MatchString(p) {
+				continue // 被正则表达式匹配排除
+			}
+			if !seen[p] {
+				seen[p] = true
+				filteredProxies = append(filteredProxies, p)
+			}
+		}
+
+		proxiesSeq := &yaml.Node{Kind: yaml.SequenceNode}
+		for _, p := range filteredProxies {
 			proxiesSeq.Content = append(proxiesSeq.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: p})
 		}
 
@@ -432,6 +535,9 @@ func injectCustomGroups(yamlContent string) string {
 
 		proxyGroupsNode.Content = append(proxyGroupsNode.Content, groupMap)
 	}
+
+	// 自动清理因 dialer-proxy 引用自身代理组而产生的闭环
+	autoPruneDialerProxyLoops(proxiesNode, proxyGroupsNode)
 
 	// 转回 YAML 字符串（保持原格式和注释）
 	out, err := yaml.Marshal(&root)
@@ -658,4 +764,68 @@ func truncateString(str string, length int) string {
 		return str
 	}
 	return str[:length] + "...(已截断)"
+}
+
+// autoPruneDialerProxyLoops 自动清理因 dialer-proxy 引用自身代理组而产生的闭环
+func autoPruneDialerProxyLoops(proxiesNode, proxyGroupsNode *yaml.Node) {
+	if proxiesNode == nil || proxiesNode.Kind != yaml.SequenceNode {
+		return
+	}
+	if proxyGroupsNode == nil || proxyGroupsNode.Kind != yaml.SequenceNode {
+		return
+	}
+
+	// 1. 获取所有节点与其 dialer-proxy 的关系
+	// nodeDialerMap[nodeName] = dialerProxyName
+	nodeDialerMap := make(map[string]string)
+	for _, proxyNode := range proxiesNode.Content {
+		if proxyNode.Kind != yaml.MappingNode {
+			continue
+		}
+		var name, dialerProxy string
+		for i := 0; i < len(proxyNode.Content); i += 2 {
+			key := proxyNode.Content[i].Value
+			valNode := proxyNode.Content[i+1]
+			if key == "name" {
+				name = valNode.Value
+			} else if key == "dialer-proxy" {
+				dialerProxy = valNode.Value
+			}
+		}
+		if name != "" && dialerProxy != "" {
+			nodeDialerMap[name] = dialerProxy
+		}
+	}
+
+	// 2. 遍历所有的代理组
+	for _, groupNode := range proxyGroupsNode.Content {
+		if groupNode.Kind != yaml.MappingNode {
+			continue
+		}
+		var groupName string
+		var proxiesSeq *yaml.Node
+		for i := 0; i < len(groupNode.Content); i += 2 {
+			key := groupNode.Content[i].Value
+			valNode := groupNode.Content[i+1]
+			if key == "name" {
+				groupName = valNode.Value
+			} else if key == "proxies" {
+				proxiesSeq = valNode
+			}
+		}
+
+		if groupName != "" && proxiesSeq != nil && proxiesSeq.Kind == yaml.SequenceNode {
+			// 在这个代理组的候选列表中，移除所有拨号前置指向本组的节点
+			var newContent []*yaml.Node
+			for _, node := range proxiesSeq.Content {
+				nodeName := node.Value
+				// 如果该节点的拨号前置正是当前正在遍历的代理组，就不要把它加进来（避免闭环）
+				if nodeDialerMap[nodeName] == groupName {
+					continue
+				}
+				newContent = append(newContent, node)
+			}
+			proxiesSeq.Content = newContent
+		}
+	}
 }

@@ -23,6 +23,9 @@ func ParseProxyLink(link string) (*ParsedProxyResult, error) {
 		return nil, fmt.Errorf("link is empty")
 	}
 
+	// 规范化特殊的 socks5 链接格式 (ip:port:user:pass 转换成 user:pass@ip:port)
+	link = normalizeSocksLink(link)
+
 	u, err := url.Parse(link)
 	if err != nil {
 		return nil, fmt.Errorf("invalid URL format: %w", err)
@@ -37,6 +40,8 @@ func ParseProxyLink(link string) (*ParsedProxyResult, error) {
 		return parseHysteria2(u)
 	case "ss":
 		return parseSS(u)
+	case "socks5", "socks":
+		return parseSocks5(u)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", scheme)
 	}
@@ -221,4 +226,108 @@ func parseSS(u *url.URL) (*ParsedProxyResult, error) {
 		Port:   port,
 		Config: config,
 	}, nil
+}
+
+func parseSocks5(u *url.URL) (*ParsedProxyResult, error) {
+	host := u.Hostname()
+	portStr := u.Port()
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid port: %s", portStr)
+	}
+
+	name := u.Fragment
+	if name == "" {
+		name = host
+	}
+	if unescaped, err := url.PathUnescape(name); err == nil {
+		name = unescaped
+	}
+
+	config := map[string]interface{}{
+		"name":   name,
+		"type":   "socks5",
+		"server": host,
+		"port":   port,
+	}
+
+	if u.User != nil {
+		username := u.User.Username()
+		password, hasPassword := u.User.Password()
+		
+		// 尝试处理 base64 编码的 userInfo
+		if !hasPassword && !strings.Contains(username, ":") {
+			decoded, err := decodeAdaptiveBase64(username)
+			if err == nil && strings.Contains(decoded, ":") {
+				parts := strings.SplitN(decoded, ":", 2)
+				username = parts[0]
+				password = parts[1]
+				hasPassword = true
+			}
+		}
+
+		if username != "" {
+			config["username"] = username
+		}
+		if hasPassword {
+			config["password"] = password
+		}
+	}
+
+	return &ParsedProxyResult{
+		Name:   name,
+		Type:   "socks5",
+		Server: host,
+		Port:   port,
+		Config: config,
+	}, nil
+}
+
+// normalizeSocksLink 尝试修正没有 @ 分隔符的非标准 socks 链接，如 socks5://ip:port:user:pass
+func normalizeSocksLink(link string) string {
+	lower := strings.ToLower(link)
+	prefix := ""
+	if strings.HasPrefix(lower, "socks5://") {
+		prefix = link[:9]
+	} else if strings.HasPrefix(lower, "socks://") {
+		prefix = link[:8]
+	} else {
+		return link
+	}
+
+	content := link[len(prefix):]
+	
+	// 暂存 fragment 和 query 以便后续拼回
+	nameSuffix := ""
+	if idx := strings.Index(content, "#"); idx != -1 {
+		nameSuffix = content[idx:]
+		content = content[:idx]
+	}
+
+	querySuffix := ""
+	if idx := strings.Index(content, "?"); idx != -1 {
+		querySuffix = content[idx:]
+		content = content[:idx]
+	}
+
+	// 如果没有包含标准的 '@'，且含有2个以上的冒号，则很可能是 ip:port:user:pass 结构
+	if !strings.Contains(content, "@") {
+		parts := strings.Split(content, ":")
+		if len(parts) >= 3 {
+			ip := parts[0]
+			port := parts[1]
+			user := parts[2]
+			pass := ""
+			if len(parts) >= 4 {
+				pass = strings.Join(parts[3:], ":") // 密码中可能含有冒号
+			}
+			
+			if pass != "" {
+				return prefix + user + ":" + pass + "@" + ip + ":" + port + querySuffix + nameSuffix
+			}
+			return prefix + user + "@" + ip + ":" + port + querySuffix + nameSuffix
+		}
+	}
+	
+	return link
 }
