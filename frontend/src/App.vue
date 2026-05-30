@@ -887,6 +887,12 @@ const saveCustomNode = async () => {
             <el-form-item label="端口">
               <el-input-number v-model="newNodeForm.port" :min="1" :max="65535" style="width: 100%"></el-input-number>
             </el-form-item>
+            <el-form-item label="UDP 转发">
+              <el-switch v-model="newNodeForm.config['udp']" active-text="开启" inactive-text="关闭" />
+              <div style="font-size: 12px; color: var(--text-secondary); margin-left: 15px; display: inline-block;">
+                开启以支持转发 STUN 及其他 UDP 协议包
+              </div>
+            </el-form-item>
             <el-form-item label="前置拨号 (dialer-proxy)">
               <el-select 
                 v-model="newNodeForm.config['dialer-proxy']" 
