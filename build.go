@@ -85,11 +85,9 @@ func main() {
 	exampleSrc := filepath.Join(backendDir, "config.example.toml")
 	exampleDst := filepath.Join(releaseDir, "config.example.toml")
 	
-	// 拷贝一份 config.example.toml 方便备份与查阅
-	if err := copyFile(exampleSrc, exampleDst); err != nil {
-		fmt.Printf("⚠️  复制 config.example.toml 失败: %v\n", err)
-	} else {
-		fmt.Println("  - 已同步备份 [config.example.toml] 至 release 目录")
+	// 清理 release 目录下冗余的 config.example.toml，保持部署文件夹的极致清爽与极简
+	if _, err := os.Stat(exampleDst); err == nil {
+		_ = os.Remove(exampleDst)
 	}
 
 	// 自动创建初始的 config.toml
