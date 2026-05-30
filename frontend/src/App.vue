@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Link, Edit, Delete, Loading } from "@element-plus/icons-vue";
+import { Link, Edit, Delete, Loading, ArrowDown } from "@element-plus/icons-vue";
 import axios from "axios";
 import { Codemirror } from "vue-codemirror";
 import { yaml as codemirrorYaml } from "@codemirror/lang-yaml";
@@ -837,6 +837,107 @@ const isCustomRule = (row: any) => {
   let key = row.payload === "-" ? row.type : `${row.type},${row.payload}`;
   return !!customRulesDict.value[key];
 };
+
+// ---------------------- 个人中心 (修改密码与退出登录) ----------------------
+const changePasswordVisible = ref(false);
+const isChangingPassword = ref(false);
+const passwordFormRef = ref<any>(null);
+
+const passwordForm = ref({
+  oldPassword: "",
+  newPassword: "",
+  confirmPassword: "",
+});
+
+const validateConfirmPassword = (_rule: any, value: string, callback: any) => {
+  if (value === "") {
+    callback(new Error("请再次输入新密码"));
+  } else if (value !== passwordForm.value.newPassword) {
+    callback(new Error("两次输入密码不一致!"));
+  } else {
+    callback();
+  }
+};
+
+const passwordRules = {
+  oldPassword: [
+    { required: true, message: "请输入当前密码", trigger: "blur" },
+    { min: 5, message: "密码长度不能小于 5 位", trigger: "blur" },
+  ],
+  newPassword: [
+    { required: true, message: "请输入新密码", trigger: "blur" },
+    { min: 5, message: "密码长度不能小于 5 位", trigger: "blur" },
+  ],
+  confirmPassword: [
+    { required: true, validator: validateConfirmPassword, trigger: "blur" },
+  ],
+};
+
+const handleUserCommand = async (command: string) => {
+  if (command === "logout") {
+    try {
+      await ElMessageBox.confirm("确定要退出登录吗？", "提示", {
+        confirmButtonText: "确定",
+        cancelButtonText: "取消",
+        type: "warning",
+        customClass: "glass-dialog",
+      });
+      
+      try {
+        await axios.post("http://localhost:8080/api/logout");
+      } catch (e) {
+        console.error("Logout request failed", e);
+      }
+      
+      localStorage.removeItem("token");
+      isLoggedIn.value = false;
+      ElMessage.success("已成功退出登录");
+    } catch {
+      // cancel
+    }
+  } else if (command === "changePassword") {
+    passwordForm.value = {
+      oldPassword: "",
+      newPassword: "",
+      confirmPassword: "",
+    };
+    changePasswordVisible.value = true;
+    if (passwordFormRef.value) {
+      passwordFormRef.value.resetFields();
+    }
+  }
+};
+
+const submitChangePassword = async () => {
+  if (!passwordFormRef.value) return;
+  
+  await passwordFormRef.value.validate(async (valid: boolean) => {
+    if (valid) {
+      isChangingPassword.value = true;
+      try {
+        const res = await axios.post("http://localhost:8080/api/change-password", {
+          old_password: passwordForm.value.oldPassword,
+          new_password: passwordForm.value.newPassword,
+        });
+        
+        if (res.data.code === 200) {
+          ElMessage.success("密码修改成功，请重新登录！");
+          changePasswordVisible.value = false;
+          localStorage.removeItem("token");
+          isLoggedIn.value = false;
+        } else {
+          ElMessage.error(res.data.message || "修改失败");
+        }
+      } catch (error: any) {
+        ElMessage.error(
+          error.response?.data?.message || error.message || "请求失败，请检查网络"
+        );
+      } finally {
+        isChangingPassword.value = false;
+      }
+    }
+  });
+};
 </script>
 
 <template>
@@ -858,9 +959,24 @@ const isCustomRule = (row: any) => {
           effect="dark"
           round
           class="status-indicator"
+          style="margin-right: 16px;"
         >
           <span class="pulse-dot"></span>后端就绪 (:8080)
         </el-tag>
+
+        <el-dropdown trigger="click" @command="handleUserCommand">
+          <span class="el-dropdown-link user-dropdown">
+            <el-avatar :size="28" class="user-avatar">A</el-avatar>
+            <span class="username-text">管理员</span>
+            <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="changePassword">修改密码</el-dropdown-item>
+              <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </header>
 
@@ -1706,6 +1822,58 @@ const isCustomRule = (row: any) => {
         Element Plus.
       </p>
     </footer>
+
+    <!-- 修改密码对话框 -->
+    <el-dialog
+      v-model="changePasswordVisible"
+      title="🔑 修改管理员密码"
+      width="400px"
+      align-center
+      class="glass-dialog"
+    >
+      <el-form 
+        :model="passwordForm" 
+        :rules="passwordRules" 
+        ref="passwordFormRef" 
+        label-position="top"
+        style="padding: 10px 0"
+      >
+        <el-form-item label="当前密码" prop="oldPassword">
+          <el-input 
+            v-model="passwordForm.oldPassword" 
+            type="password" 
+            show-password 
+            placeholder="请输入当前密码" 
+          />
+        </el-form-item>
+        <el-form-item label="新密码" prop="newPassword">
+          <el-input 
+            v-model="passwordForm.newPassword" 
+            type="password" 
+            show-password 
+            placeholder="请输入新密码 (最小5位)" 
+          />
+        </el-form-item>
+        <el-form-item label="确认新密码" prop="confirmPassword">
+          <el-input 
+            v-model="passwordForm.confirmPassword" 
+            type="password" 
+            show-password 
+            placeholder="请再次输入新密码" 
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="changePasswordVisible = false" plain>取消</el-button>
+        <el-button 
+          type="primary" 
+          :loading="isChangingPassword" 
+          @click="submitChangePassword"
+        >
+          确认修改
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -2258,5 +2426,67 @@ const isCustomRule = (row: any) => {
   font-size: 48px;
   color: #38bdf8;
   background-color: #0f172a;
+}
+
+/* 用户下拉菜单精致样式 */
+.user-dropdown {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--text-primary);
+  padding: 4px 10px;
+  border-radius: 12px;
+  transition: all 0.3s ease;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.user-dropdown:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(56, 189, 248, 0.2);
+}
+
+.user-avatar {
+  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%) !important;
+  color: #ffffff !important;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.username-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* 弹出层全局样式统一定制 */
+:deep(.el-dropdown__popper) {
+  --el-dropdown-menu-box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.6) !important;
+}
+
+:deep(.el-dropdown-menu) {
+  background-color: rgba(13, 18, 30, 0.95) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  backdrop-filter: blur(15px) !important;
+  border-radius: 14px !important;
+  padding: 6px !important;
+}
+
+:deep(.el-dropdown-menu__item) {
+  color: var(--text-secondary) !important;
+  border-radius: 8px !important;
+  padding: 8px 16px !important;
+  font-size: 13px !important;
+  transition: all 0.2s ease !important;
+}
+
+:deep(.el-dropdown-menu__item:hover) {
+  background-color: rgba(56, 189, 248, 0.1) !important;
+  color: #38bdf8 !important;
+}
+
+:deep(.el-dropdown-menu__item.el-dropdown-menu__item--divided) {
+  border-top-color: rgba(255, 255, 255, 0.05) !important;
 }
 </style>

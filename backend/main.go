@@ -57,6 +57,8 @@ func main() {
 	
 	// 注册验证接口
 	api.GET("/verify", handleVerify)
+	api.POST("/logout", handleLogout)
+	api.POST("/change-password", handleChangePassword)
 
 	// 注册解码接口
 	api.POST("/decode", handleDecode)
@@ -118,10 +120,13 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if _, ok := SessionTokens.Load(token); !ok {
+		usernameVal, ok := SessionTokens.Load(token)
+		if !ok {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "无效或已过期的凭证"})
 			return
 		}
+		// 将当前登录的用户名保存至上下文，方便后续接口获取
+		c.Set("username", usernameVal.(string))
 		c.Next()
 	}
 }
@@ -282,9 +287,72 @@ func handleLogin(c *gin.Context) {
 	}
 
 	token := uuid.New().String()
-	SessionTokens.Store(token, time.Now())
+	SessionTokens.Store(token, user.Username)
 
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "登录成功", "token": token})
+}
+
+func handleLogout(c *gin.Context) {
+	authHeader := c.GetHeader("Authorization")
+	if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		SessionTokens.Delete(token)
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "已成功退出登录"})
+}
+
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required"`
+}
+
+func handleChangePassword(c *gin.Context) {
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
+		return
+	}
+
+	var req ChangePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+
+	var user User
+	if err := DB.Where("username = ?", username.(string)).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "用户不存在"})
+		return
+	}
+
+	// 验证旧密码是否正确
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.OldPassword)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "原密码不正确"})
+		return
+	}
+
+	// 加密并保存新密码
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "密码加密失败"})
+		return
+	}
+
+	user.Password = string(hashedPassword)
+	if err := DB.Save(&user).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存密码失败"})
+		return
+	}
+
+	// 清理该用户的所有活跃 Session 使得所有设备强制重新登录
+	SessionTokens.Range(func(key, value interface{}) bool {
+		if valStr, ok := value.(string); ok && valStr == user.Username {
+			SessionTokens.Delete(key)
+		}
+		return true
+	})
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "密码修改成功，请使用新密码重新登录"})
 }
 
 
