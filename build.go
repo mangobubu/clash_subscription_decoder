@@ -1,0 +1,112 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+)
+
+func main() {
+	fmt.Println("==================================================")
+	fmt.Println("       Clash Proxy 全栈一键自动化构建系统")
+	fmt.Println("==================================================")
+
+	// 1. 确定项目目录结构
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("❌ 获取当前工作目录失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	frontendDir := filepath.Join(wd, "frontend")
+	backendDir := filepath.Join(wd, "backend")
+
+	// 验证前后端文件夹是否存在
+	if !dirExists(frontendDir) || !dirExists(backendDir) {
+		fmt.Println("❌ 错误: 未能在当前目录下找到 'frontend' 或 'backend' 文件夹！")
+		fmt.Println("💡 请确保您在 clash-proxy 项目根目录下运行此脚本。")
+		os.Exit(1)
+	}
+
+	// 2. 探测包管理器 (优先使用 pnpm，若无则自动回退到 npm)
+	fmt.Println("🔍 正在探测系统中的包管理器...")
+	pm := "pnpm"
+	if _, err := exec.LookPath("pnpm"); err != nil {
+		fmt.Println("⚠️  未找到 pnpm，正在自动降级并回退至使用 npm...")
+		pm = "npm"
+		if _, err := exec.LookPath("npm"); err != nil {
+			fmt.Println("❌ 错误: 本地未安装 npm 或 pnpm 包管理器！请先安装 Node.js 与 npm。")
+			os.Exit(1)
+		}
+	}
+	fmt.Printf("✅ 已选定包管理器: %s\n\n", pm)
+
+	// 3. 执行前端依赖安装
+	fmt.Printf("📦 正在前端目录安装依赖 [%s install]...\n", pm)
+	if err := runCommand(frontendDir, pm, "install"); err != nil {
+		fmt.Printf("❌ 前端依赖安装失败: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("✅ 前端依赖安装成功！\n")
+
+	// 4. 执行前端生产环境打包
+	fmt.Printf("🚀 正在编译前端静态资源 [%s run build]...\n", pm)
+	if err := runCommand(frontendDir, pm, "run", "build"); err != nil {
+		fmt.Printf("❌ 前端打包失败: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("✅ 前端打包并直出至 backend/dist 成功！\n")
+
+	// 5. 执行后端 Go 二进制编译
+	binaryName := "clash-proxy"
+	if runtime.GOOS == "windows" {
+		binaryName = "clash-proxy.exe"
+	}
+	binaryPath := filepath.Join(backendDir, binaryName)
+	fmt.Printf("🔨 正在编译 Go 后端应用 [go build -o backend/%s]...\n", binaryName)
+	if err := runCommand(backendDir, "go", "build", "-o", binaryName); err != nil {
+		fmt.Printf("❌ 后端编译失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("\n==================================================")
+	fmt.Println("🎉 全栈单二进制文件编译成功！")
+	fmt.Printf("👉 产物位置: %s\n", binaryPath)
+	fmt.Println("💡 您仅需运行此文件即可拉起包含全量前端的完整系统！")
+	fmt.Println("==================================================")
+}
+
+// dirExists 检查文件夹是否存在
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false
+	}
+	return info.IsDir()
+}
+
+// runCommand 跨平台执行命令的通用封装
+func runCommand(dir string, name string, args ...string) error {
+	var cmd *exec.Cmd
+
+	if runtime.GOOS == "windows" {
+		// 在 Windows 环境下，npm 和 pnpm 是批处理脚本 (.cmd)，必须通过 cmd.exe /c 来调起。
+		// 而 go 本身是标准的 .exe 可执行二进制，可以直接运行。
+		if name == "npm" || name == "pnpm" {
+			fullArgs := append([]string{"/c", name}, args...)
+			cmd = exec.Command("cmd", fullArgs...)
+		} else {
+			cmd = exec.Command(name, args...)
+		}
+	} else {
+		cmd = exec.Command(name, args...)
+	}
+
+	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
+}

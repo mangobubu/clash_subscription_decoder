@@ -133,23 +133,19 @@ The frontend application will be served at `http://localhost:5173`. The local de
 
 ### 4. Production Build & One-File Deployment
 
-The system supports **single-file full-stack deployment**. When compiling the Go backend, all frontend static assets are statically embedded into the executable binary. In your production environment, you only need to run the single compiled binary.
+The system supports **single-file full-stack deployment**. To simplify the building workflow, the project includes an automated, cross-platform build utility written in pure Go. When compiling the Go backend, all frontend static assets are statically embedded into the executable binary. In your production environment, you only need to run the single compiled binary.
 
-#### Step 1: Build Frontend
-Run the build command in the frontend directory. The compiled static resources will be automatically exported directly to the backend embedding folder `backend/dist`:
+#### Step 1: One-Click Full-Stack Build
+You do not need to install packages or copy resources manually. Simply run the following command in the project **root directory**. The build system will automatically discover your local package manager (prioritizing `pnpm`, falling back to `npm` if not found), pull dependencies, build frontend assets, and compile the Go backend:
 ```bash
-cd frontend
-pnpm build
+go run build.go
 ```
 
-#### Step 2: Compile & Run Backend
-Compile the Go project in the backend directory. This will merge the compiled frontend assets together with the Go application code into the final executable:
+#### Step 2: Run Full-Stack Server
+Upon successful compilation, the final standalone executable binary will be generated in the `backend` directory:
 ```bash
 cd backend
-# Compile into an executable binary with embedded frontend (Windows will generate clash-proxy.exe automatically)
-go build -o clash-proxy
-
-# Run the full-stack server
+# Run the full-stack server (filename will be clash-proxy.exe on Windows)
 ./clash-proxy
 ```
 Once started, visit `http://localhost:8080` in your browser to access both the administrative web interface and the background APIs instantly. No need to deploy frontend assets separately via Nginx or other web servers!

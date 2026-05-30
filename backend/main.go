@@ -1,4 +1,7 @@
+//go:generate go run ../build.go
+
 package main
+
 
 import (
 	"crypto/tls"
