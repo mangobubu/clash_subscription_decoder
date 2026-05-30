@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Link, Edit, Delete } from '@element-plus/icons-vue'
-import axios from 'axios'
-import { Codemirror } from 'vue-codemirror'
-import { yaml as codemirrorYaml } from '@codemirror/lang-yaml'
-import { oneDark } from '@codemirror/theme-one-dark'
-import { EditorState } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
-import jsYaml from 'js-yaml'
+import { ref, computed, onMounted } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { Link, Edit, Delete } from "@element-plus/icons-vue";
+import axios from "axios";
+import { Codemirror } from "vue-codemirror";
+import { yaml as codemirrorYaml } from "@codemirror/lang-yaml";
+import { oneDark } from "@codemirror/theme-one-dark";
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import jsYaml from "js-yaml";
 
 // CodeMirror 配置
 const cmExtensions = [
@@ -16,44 +16,46 @@ const cmExtensions = [
   oneDark,
   EditorState.readOnly.of(true),
   EditorView.lineWrapping,
-]
+];
 
 // 状态定义
-const inputUrl = ref('')
-const isLoading = ref(false)
-const activeTab = ref('nodes')
-const errorMsg = ref('')
-const result = ref<{ url: string; raw_base64: string; decoded: string } | null>(null)
+const inputUrl = ref("");
+const isLoading = ref(false);
+const activeTab = ref("nodes");
+const errorMsg = ref("");
+const result = ref<{ url: string; raw_base64: string; decoded: string } | null>(
+  null,
+);
 
 // ---------------------- 自定义资源字典状态 ----------------------
-const customNodesDict = ref<Record<string, any>>({})
-const customGroupsDict = ref<Record<string, any>>({})
+const customNodesDict = ref<Record<string, any>>({});
+const customGroupsDict = ref<Record<string, any>>({});
 
 const fetchCustomData = async () => {
   try {
     const [nodesRes, groupsRes] = await Promise.all([
-      axios.get('http://localhost:8080/api/custom-nodes'),
-      axios.get('http://localhost:8080/api/custom-groups')
-    ])
-    const nDict: Record<string, any> = {}
+      axios.get("http://localhost:8080/api/custom-nodes"),
+      axios.get("http://localhost:8080/api/custom-groups"),
+    ]);
+    const nDict: Record<string, any> = {};
     if (nodesRes.data.code === 200) {
-      nodesRes.data.data.forEach((n: any) => nDict[n.Name || n.name] = n)
+      nodesRes.data.data.forEach((n: any) => (nDict[n.Name || n.name] = n));
     }
-    customNodesDict.value = nDict
+    customNodesDict.value = nDict;
 
-    const gDict: Record<string, any> = {}
+    const gDict: Record<string, any> = {};
     if (groupsRes.data.code === 200) {
-      groupsRes.data.data.forEach((g: any) => gDict[g.Name || g.name] = g)
+      groupsRes.data.data.forEach((g: any) => (gDict[g.Name || g.name] = g));
     }
-    customGroupsDict.value = gDict
-  } catch(e) {
-    console.error('获取自定义数据失败', e)
+    customGroupsDict.value = gDict;
+  } catch (e) {
+    console.error("获取自定义数据失败", e);
   }
-}
+};
 
 onMounted(() => {
-  fetchCustomData()
-})
+  fetchCustomData();
+});
 
 // 节点接口定义
 interface ProxyNode {
@@ -66,447 +68,560 @@ interface ProxyNode {
 
 // 快速填入 Mock 地址
 const handleQuickMock = () => {
-  inputUrl.value = 'mock.clash.local/sub'
-  handleDecode()
-}
+  inputUrl.value = "mock.clash.local/sub";
+  handleDecode();
+};
 
 // 清除输入
 const handleClear = () => {
-  inputUrl.value = ''
-  result.value = null
-  errorMsg.value = ''
-}
+  inputUrl.value = "";
+  result.value = null;
+  errorMsg.value = "";
+};
 
 // 解析并获取 Base64 内容
 const handleDecode = async () => {
-  const url = inputUrl.value.trim()
+  const url = inputUrl.value.trim();
   if (!url) {
-    ElMessage.warning('请输入订阅或配置地址')
-    return
+    ElMessage.warning("请输入订阅或配置地址");
+    return;
   }
 
-  isLoading.value = true
-  errorMsg.value = ''
-  result.value = null
+  isLoading.value = true;
+  errorMsg.value = "";
+  result.value = null;
 
   try {
-    const response = await axios.post('http://localhost:8080/api/decode', { url })
+    const response = await axios.post("http://localhost:8080/api/decode", {
+      url,
+    });
     if (response.data && response.data.code === 200) {
-      result.value = response.data.data
-      await fetchCustomData()
-      ElMessage.success('成功拉取并完成 Base64 解码！')
+      result.value = response.data.data;
+      await fetchCustomData();
+      ElMessage.success("成功拉取并完成 Base64 解码！");
       // 如果解析出来的节点数大于0，默认跳到 nodes 页签，否则跳到 text
       if (parsedNodes.value.length > 0) {
-        activeTab.value = 'nodes'
+        activeTab.value = "nodes";
       } else {
-        activeTab.value = 'text'
+        activeTab.value = "text";
       }
     } else {
-      throw new Error(response.data.message || '未知错误')
+      throw new Error(response.data.message || "未知错误");
     }
   } catch (error: any) {
-    console.error(error)
-    let msg = '网络连接失败，请检查后端服务是否正常启动 (http://localhost:8080)'
+    console.error(error);
+    let msg =
+      "网络连接失败，请检查后端服务是否正常启动 (http://localhost:8080)";
     if (error.response && error.response.data) {
-      msg = error.response.data.message || msg
+      msg = error.response.data.message || msg;
       if (error.response.data.error) {
-        msg += ` (${error.response.data.error})`
+        msg += ` (${error.response.data.error})`;
       }
     } else if (error.message) {
-      msg = error.message
+      msg = error.message;
     }
-    errorMsg.value = msg
-    ElMessage.error('获取或解码失败')
+    errorMsg.value = msg;
+    ElMessage.error("获取或解码失败");
   } finally {
-    isLoading.value = false
+    isLoading.value = false;
   }
-}
+};
 
 // 核心响应式配置对象
 const parsedConfig = computed<any>(() => {
-  if (!result.value || !result.value.decoded) return null
+  if (!result.value || !result.value.decoded) return null;
   try {
-    return jsYaml.load(result.value.decoded)
+    return jsYaml.load(result.value.decoded);
   } catch (err) {
-    console.error('YAML 解析失败:', err)
-    return null
+    console.error("YAML 解析失败:", err);
+    return null;
   }
-})
+});
 
 // 解析代理节点
 const parsedNodes = computed<ProxyNode[]>(() => {
-  if (!parsedConfig.value || !parsedConfig.value.proxies) return []
+  if (!parsedConfig.value || !parsedConfig.value.proxies) return [];
   return parsedConfig.value.proxies.map((p: any) => ({
     name: p.name,
     type: p.type,
     server: p.server,
     port: p.port,
-    details: p
-  }))
-})
+    details: p,
+  }));
+});
 
 // 代理组解析
 const proxyGroups = computed<any[]>(() => {
-  if (!parsedConfig.value || !parsedConfig.value['proxy-groups']) return []
-  return parsedConfig.value['proxy-groups']
-})
+  if (!parsedConfig.value || !parsedConfig.value["proxy-groups"]) return [];
+  return parsedConfig.value["proxy-groups"];
+});
 
 // 规则搜索关键字
-const ruleSearchQuery = ref('')
+const ruleSearchQuery = ref("");
+
+// 分流规则目标策略筛选
+const ruleTargetFilter = ref("");
+const ruleTargets = computed(() => {
+  if (!parsedConfig.value || !parsedConfig.value.rules) return [];
+  const targets = new Set<string>();
+  parsedConfig.value.rules.forEach((ruleStr: string) => {
+    const parts = ruleStr.split(",");
+    const target = parts.length > 2 ? parts[2] : parts[1] || "-";
+    targets.add(target);
+  });
+  return Array.from(targets).sort();
+});
 
 // 规则分页状态
-const currentRulePage = ref(1)
-const rulePageSize = ref(100)
+const currentRulePage = ref(1);
+const rulePageSize = ref(100);
 
-// 监听搜索词变化，重置页码
-import { watch } from 'vue'
-watch(ruleSearchQuery, () => {
-  currentRulePage.value = 1
-})
+// 监听搜索词或筛选变化，重置页码
+import { watch } from "vue";
+watch([ruleSearchQuery, ruleTargetFilter], () => {
+  currentRulePage.value = 1;
+});
 
 // 分流规则解析 (拆解 DOMAIN-SUFFIX,google.com,PROXY)
 const parsedRules = computed<any[]>(() => {
-  if (!parsedConfig.value || !parsedConfig.value.rules) return []
+  if (!parsedConfig.value || !parsedConfig.value.rules) return [];
   let rules = parsedConfig.value.rules.map((ruleStr: string) => {
-    const parts = ruleStr.split(',')
+    const parts = ruleStr.split(",");
     return {
       raw: ruleStr,
-      type: parts[0] || 'UNKNOWN',
-      payload: parts.length > 2 ? parts[1] : '-',
-      target: parts.length > 2 ? parts[2] : (parts[1] || '-')
-    }
-  })
-  
-  if (ruleSearchQuery.value) {
-    const q = ruleSearchQuery.value.toLowerCase()
-    rules = rules.filter((r: any) => 
-      r.type.toLowerCase().includes(q) || 
-      r.payload.toLowerCase().includes(q) || 
-      r.target.toLowerCase().includes(q)
-    )
+      type: parts[0] || "UNKNOWN",
+      payload: parts.length > 2 ? parts[1] : "-",
+      target: parts.length > 2 ? parts[2] : parts[1] || "-",
+    };
+  });
+
+  if (ruleTargetFilter.value) {
+    rules = rules.filter((r: any) => r.target === ruleTargetFilter.value);
   }
-  
-  return rules
-})
+
+  if (ruleSearchQuery.value) {
+    const q = ruleSearchQuery.value.toLowerCase();
+    rules = rules.filter(
+      (r: any) =>
+        r.type.toLowerCase().includes(q) ||
+        r.payload.toLowerCase().includes(q) ||
+        r.target.toLowerCase().includes(q),
+    );
+  }
+
+  return rules;
+});
 
 // 当前页显示的规则
 const paginatedRules = computed(() => {
-  const start = (currentRulePage.value - 1) * rulePageSize.value
-  const end = start + rulePageSize.value
-  return parsedRules.value.slice(start, end)
-})
+  const start = (currentRulePage.value - 1) * rulePageSize.value;
+  const end = start + rulePageSize.value;
+  return parsedRules.value.slice(start, end);
+});
 
 // 根据节点名称自适应匹配国旗表情包
 const getFlagEmoji = (name: string): string => {
-  const n = name.toUpperCase()
-  if (n.includes('香港') || n.includes('HK') || n.includes('HONGKONG')) return '🇭🇰'
-  if (n.includes('新加坡') || n.includes('SG') || n.includes('SINGAPORE')) return '🇸🇬'
-  if (n.includes('日本') || n.includes('东京') || n.includes('JP') || n.includes('JAPAN') || n.includes('TOKYO')) return '🇯🇵'
-  if (n.includes('美国') || n.includes('US') || n.includes('UNITED STATES') || n.includes('美')) return '🇺🇸'
-  if (n.includes('台湾') || n.includes('TW') || n.includes('TAIWAN')) return '🇹🇼'
-  if (n.includes('韩国') || n.includes('首尔') || n.includes('KR') || n.includes('KOREA')) return '🇰🇷'
-  if (n.includes('英国') || n.includes('UK') || n.includes('GB') || n.includes('ENGLAND')) return '🇬🇧'
-  if (n.includes('德国') || n.includes('DE') || n.includes('GERMANY')) return '🇩🇪'
-  if (n.includes('俄罗斯') || n.includes('RU') || n.includes('RUSSIA')) return '🇷🇺'
-  return '🌐'
-}
+  const n = name.toUpperCase();
+  if (n.includes("香港") || n.includes("HK") || n.includes("HONGKONG"))
+    return "🇭🇰";
+  if (n.includes("新加坡") || n.includes("SG") || n.includes("SINGAPORE"))
+    return "🇸🇬";
+  if (
+    n.includes("日本") ||
+    n.includes("东京") ||
+    n.includes("JP") ||
+    n.includes("JAPAN") ||
+    n.includes("TOKYO")
+  )
+    return "🇯🇵";
+  if (
+    n.includes("美国") ||
+    n.includes("US") ||
+    n.includes("UNITED STATES") ||
+    n.includes("美")
+  )
+    return "🇺🇸";
+  if (n.includes("台湾") || n.includes("TW") || n.includes("TAIWAN"))
+    return "🇹🇼";
+  if (
+    n.includes("韩国") ||
+    n.includes("首尔") ||
+    n.includes("KR") ||
+    n.includes("KOREA")
+  )
+    return "🇰🇷";
+  if (
+    n.includes("英国") ||
+    n.includes("UK") ||
+    n.includes("GB") ||
+    n.includes("ENGLAND")
+  )
+    return "🇬🇧";
+  if (n.includes("德国") || n.includes("DE") || n.includes("GERMANY"))
+    return "🇩🇪";
+  if (n.includes("俄罗斯") || n.includes("RU") || n.includes("RUSSIA"))
+    return "🇷🇺";
+  return "🌐";
+};
 
 // 节点协议色彩主题
 const getNodeTypeTag = (type: string) => {
-  const t = type.toLowerCase()
-  if (t === 'ss' || t === 'shadowsocks') return { type: 'warning', label: 'SS' }
-  if (t === 'vmess') return { type: 'danger', label: 'VMESS' }
-  if (t === 'vless') return { type: 'success', label: 'VLESS' }
-  if (t === 'trojan') return { type: 'primary', label: 'TROJAN' }
-  if (t === 'ssr' || t === 'shadowsocksr') return { type: 'info', label: 'SSR' }
-  return { type: 'info', label: type.toUpperCase() }
-}
+  const t = type.toLowerCase();
+  if (t === "ss" || t === "shadowsocks")
+    return { type: "warning", label: "SS" };
+  if (t === "vmess") return { type: "danger", label: "VMESS" };
+  if (t === "vless") return { type: "success", label: "VLESS" };
+  if (t === "trojan") return { type: "primary", label: "TROJAN" };
+  if (t === "ssr" || t === "shadowsocksr")
+    return { type: "info", label: "SSR" };
+  return { type: "info", label: type.toUpperCase() };
+};
 
 // 统计信息
 const stats = computed(() => {
-  if (!result.value) return { size: 0, lines: 0 }
-  const size = new Blob([result.value.decoded]).size
-  const lines = result.value.decoded.split('\n').length
-  return { size, lines }
-})
+  if (!result.value) return { size: 0, lines: 0 };
+  const size = new Blob([result.value.decoded]).size;
+  const lines = result.value.decoded.split("\n").length;
+  return { size, lines };
+});
 
 // 一键复制
 const handleCopy = async () => {
-  if (!result.value) return
+  if (!result.value) return;
   try {
-    await navigator.clipboard.writeText(result.value.decoded)
-    ElMessage.success('配置内容已成功复制到剪贴板！')
+    await navigator.clipboard.writeText(result.value.decoded);
+    ElMessage.success("配置内容已成功复制到剪贴板！");
   } catch (err) {
-    ElMessage.error('复制失败，请手动选择复制')
+    ElMessage.error("复制失败，请手动选择复制");
   }
-}
+};
 
 // 导出下载文件
 const handleDownload = () => {
-  if (!result.value) return
-  const blob = new Blob([result.value.decoded], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `clash_decoded_${Date.now()}.yaml`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-  ElMessage.success('成功导出本地配置文件！')
-}
+  if (!result.value) return;
+  const blob = new Blob([result.value.decoded], {
+    type: "text/plain;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `clash_decoded_${Date.now()}.yaml`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  ElMessage.success("成功导出本地配置文件！");
+};
 
 // ---------------------- 自定义组管理逻辑 ----------------------
-const groupDialogVisible = ref(false)
-const isSubmittingGroup = ref(false)
-const editingGroupId = ref<number | null>(null)
+const groupDialogVisible = ref(false);
+const isSubmittingGroup = ref(false);
+const editingGroupId = ref<number | null>(null);
 
 const newGroupForm = ref({
-  name: '',
-  type: 'select',
+  name: "",
+  type: "select",
   proxies: [] as string[],
-  exclude: ''
-})
+  exclude: "",
+});
 
-const groupTypes = ['select', 'url-test', 'fallback', 'load-balance']
+const groupTypes = ["select", "url-test", "fallback", "load-balance"];
 
 const openGroupDialog = () => {
-  editingGroupId.value = null
-  newGroupForm.value = { name: '', type: 'select', proxies: [], exclude: '' }
-  groupDialogVisible.value = true
-}
+  editingGroupId.value = null;
+  newGroupForm.value = { name: "", type: "select", proxies: [], exclude: "" };
+  groupDialogVisible.value = true;
+};
 
 const editCustomGroup = (groupName: string) => {
-  const customInfo = customGroupsDict.value[groupName]
-  if (!customInfo) return
-  editingGroupId.value = customInfo.ID
-  let proxiesList: string[] = []
-  try { proxiesList = JSON.parse(customInfo.Proxies || '[]') } catch(e){}
+  const customInfo = customGroupsDict.value[groupName];
+  if (!customInfo) return;
+  editingGroupId.value = customInfo.ID;
+  let proxiesList: string[] = [];
+  try {
+    proxiesList = JSON.parse(customInfo.Proxies || "[]");
+  } catch (e) {}
   newGroupForm.value = {
     name: customInfo.Name || customInfo.name,
     type: customInfo.Type || customInfo.type,
     proxies: proxiesList,
-    exclude: customInfo.Exclude || customInfo.exclude || ''
-  }
-  groupDialogVisible.value = true
-}
+    exclude: customInfo.Exclude || customInfo.exclude || "",
+  };
+  groupDialogVisible.value = true;
+};
 
 const deleteCustomGroup = (groupName: string) => {
-  const customInfo = customGroupsDict.value[groupName]
-  if (!customInfo) return
-  ElMessageBox.confirm(`确定要删除自定义策略组 [${groupName}] 吗？`, '安全提示', {
-    confirmButtonText: '确定删除',
-    cancelButtonText: '取消',
-    type: 'warning'
-  }).then(async () => {
-    try {
-      const res = await axios.delete(`http://localhost:8080/api/custom-groups/${customInfo.ID}`)
-      if (res.data.code === 200) {
-        ElMessage.success('自定义策略组已成功删除！')
-        await fetchCustomData()
-        if (inputUrl.value) {
-          await handleDecode()
+  const customInfo = customGroupsDict.value[groupName];
+  if (!customInfo) return;
+  ElMessageBox.confirm(
+    `确定要删除自定义策略组 [${groupName}] 吗？`,
+    "安全提示",
+    {
+      confirmButtonText: "确定删除",
+      cancelButtonText: "取消",
+      type: "warning",
+    },
+  )
+    .then(async () => {
+      try {
+        const res = await axios.delete(
+          `http://localhost:8080/api/custom-groups/${customInfo.ID}`,
+        );
+        if (res.data.code === 200) {
+          ElMessage.success("自定义策略组已成功删除！");
+          await fetchCustomData();
+          if (inputUrl.value) {
+            await handleDecode();
+          }
         }
+      } catch (err: any) {
+        ElMessage.error("删除失败: " + err.message);
       }
-    } catch(err: any) {
-      ElMessage.error('删除失败: ' + err.message)
-    }
-  }).catch(() => {})
-}
+    })
+    .catch(() => {});
+};
 
 const selectAllNodes = () => {
-  if (!newGroupForm.value.proxies.includes('[ALL_NODES]')) {
-    newGroupForm.value.proxies.push('[ALL_NODES]')
+  if (!newGroupForm.value.proxies.includes("[ALL_NODES]")) {
+    newGroupForm.value.proxies.push("[ALL_NODES]");
   }
-}
+};
 
 const selectAllExistingGroups = () => {
-  const currentGroups = proxyGroups.value.map(g => g.name)
+  const currentGroups = proxyGroups.value.map((g) => g.name);
   for (const g of currentGroups) {
     if (!newGroupForm.value.proxies.includes(g)) {
-      newGroupForm.value.proxies.push(g)
+      newGroupForm.value.proxies.push(g);
     }
   }
-}
+};
 
 const saveCustomGroup = async () => {
   if (!newGroupForm.value.name) {
-    ElMessage.warning('请输入策略组名称')
-    return
+    ElMessage.warning("请输入策略组名称");
+    return;
   }
   if (newGroupForm.value.proxies.length === 0) {
-    ElMessage.warning('请至少选择一个代理或节点')
-    return
+    ElMessage.warning("请至少选择一个代理或节点");
+    return;
   }
 
-  isSubmittingGroup.value = true
+  isSubmittingGroup.value = true;
   try {
     let res;
     if (editingGroupId.value) {
-      res = await axios.put(`http://localhost:8080/api/custom-groups/${editingGroupId.value}`, newGroupForm.value)
+      res = await axios.put(
+        `http://localhost:8080/api/custom-groups/${editingGroupId.value}`,
+        newGroupForm.value,
+      );
     } else {
-      res = await axios.post('http://localhost:8080/api/custom-groups', newGroupForm.value)
+      res = await axios.post(
+        "http://localhost:8080/api/custom-groups",
+        newGroupForm.value,
+      );
     }
     if (res.data.code === 200) {
-      ElMessage.success(editingGroupId.value ? '自定义组更新成功！' : '自定义组已云端保存成功！')
-      groupDialogVisible.value = false
-      await fetchCustomData()
+      ElMessage.success(
+        editingGroupId.value
+          ? "自定义组更新成功！"
+          : "自定义组已云端保存成功！",
+      );
+      groupDialogVisible.value = false;
+      await fetchCustomData();
       if (inputUrl.value) {
-        await handleDecode()
+        await handleDecode();
       }
     } else {
-      throw new Error(res.data.message)
+      throw new Error(res.data.message);
     }
   } catch (error: any) {
-    ElMessage.error('保存失败: ' + (error.response?.data?.message || error.message))
+    ElMessage.error(
+      "保存失败: " + (error.response?.data?.message || error.message),
+    );
   } finally {
-    isSubmittingGroup.value = false
+    isSubmittingGroup.value = false;
   }
-}
+};
 
 // ---------------------- 自定义节点管理逻辑 ----------------------
-const nodeDialogVisible = ref(false)
-const nodeActiveTab = ref('link')
-const isParsingLink = ref(false)
-const isSubmittingNode = ref(false)
-const editingNodeId = ref<number | null>(null)
+const nodeDialogVisible = ref(false);
+const nodeActiveTab = ref("link");
+const isParsingLink = ref(false);
+const isSubmittingNode = ref(false);
+const editingNodeId = ref<number | null>(null);
 
 const nodeLinkForm = ref({
-  link: ''
-})
+  link: "",
+});
 
 const newNodeForm = ref({
-  name: '',
-  type: 'vless',
-  server: '',
+  name: "",
+  type: "vless",
+  server: "",
   port: 443,
-  config: {} as Record<string, any>
-})
+  config: {} as Record<string, any>,
+});
 
-const nodeTypes = ['vless', 'hysteria2', 'ss', 'vmess', 'trojan', 'socks5']
+const nodeTypes = ["vless", "hysteria2", "ss", "vmess", "trojan", "socks5"];
 
 const configString = computed({
   get: () => JSON.stringify(newNodeForm.value.config, null, 2),
   set: (val: string) => {
     try {
-      newNodeForm.value.config = JSON.parse(val)
-    } catch(e) {
+      newNodeForm.value.config = JSON.parse(val);
+    } catch (e) {
       // ignore
     }
-  }
-})
+  },
+});
 
 const openNodeDialog = () => {
-  editingNodeId.value = null
-  nodeLinkForm.value.link = ''
-  newNodeForm.value = { name: '', type: 'vless', server: '', port: 443, config: {} }
-  nodeDialogVisible.value = true
-  nodeActiveTab.value = 'link'
-}
+  editingNodeId.value = null;
+  nodeLinkForm.value.link = "";
+  newNodeForm.value = {
+    name: "",
+    type: "vless",
+    server: "",
+    port: 443,
+    config: {},
+  };
+  nodeDialogVisible.value = true;
+  nodeActiveTab.value = "link";
+};
 
 const editCustomNode = (nodeName: string) => {
-  const customInfo = customNodesDict.value[nodeName]
-  if (!customInfo) return
-  editingNodeId.value = customInfo.ID
-  let configMap: Record<string, any> = {}
-  try { configMap = JSON.parse(customInfo.Config || '{}') } catch(e){}
+  const customInfo = customNodesDict.value[nodeName];
+  if (!customInfo) return;
+  editingNodeId.value = customInfo.ID;
+  let configMap: Record<string, any> = {};
+  try {
+    configMap = JSON.parse(customInfo.Config || "{}");
+  } catch (e) {}
   newNodeForm.value = {
     name: customInfo.Name || customInfo.name,
     type: customInfo.Type || customInfo.type,
     server: customInfo.Server || customInfo.server,
     port: customInfo.Port || customInfo.port,
-    config: configMap
-  }
-  nodeActiveTab.value = 'manual'
-  nodeDialogVisible.value = true
-}
+    config: configMap,
+  };
+  nodeActiveTab.value = "manual";
+  nodeDialogVisible.value = true;
+};
 
 const deleteCustomNode = (nodeName: string) => {
-  const customInfo = customNodesDict.value[nodeName]
-  if (!customInfo) return
-  ElMessageBox.confirm(`确定要彻底删除自定义节点 [${nodeName}] 吗？`, '安全提示', {
-    confirmButtonText: '立即销毁',
-    cancelButtonText: '取消保留',
-    type: 'warning'
-  }).then(async () => {
-    try {
-      const res = await axios.delete(`http://localhost:8080/api/custom-nodes/${customInfo.ID}`)
-      if (res.data.code === 200) {
-        ElMessage.success('自定义节点已被彻底删除！')
-        await fetchCustomData()
-        if (inputUrl.value) {
-          await handleDecode()
+  const customInfo = customNodesDict.value[nodeName];
+  if (!customInfo) return;
+  ElMessageBox.confirm(
+    `确定要彻底删除自定义节点 [${nodeName}] 吗？`,
+    "安全提示",
+    {
+      confirmButtonText: "立即销毁",
+      cancelButtonText: "取消保留",
+      type: "warning",
+    },
+  )
+    .then(async () => {
+      try {
+        const res = await axios.delete(
+          `http://localhost:8080/api/custom-nodes/${customInfo.ID}`,
+        );
+        if (res.data.code === 200) {
+          ElMessage.success("自定义节点已被彻底删除！");
+          await fetchCustomData();
+          if (inputUrl.value) {
+            await handleDecode();
+          }
         }
+      } catch (err: any) {
+        ElMessage.error("删除节点失败: " + err.message);
       }
-    } catch(err: any) {
-      ElMessage.error('删除节点失败: ' + err.message)
-    }
-  }).catch(() => {})
-}
+    })
+    .catch(() => {});
+};
 
 const parseNodeLink = async () => {
   if (!nodeLinkForm.value.link) {
-    ElMessage.warning('请输入节点链接')
-    return
+    ElMessage.warning("请输入节点链接");
+    return;
   }
-  isParsingLink.value = true
+  isParsingLink.value = true;
   try {
-    const res = await axios.post('http://localhost:8080/api/parse-link', { link: nodeLinkForm.value.link })
+    const res = await axios.post("http://localhost:8080/api/parse-link", {
+      link: nodeLinkForm.value.link,
+    });
     if (res.data.code === 200) {
-      const data = res.data.data
-      newNodeForm.value.name = data.name || ''
-      newNodeForm.value.type = data.type || 'vless'
-      newNodeForm.value.server = data.server || ''
-      newNodeForm.value.port = data.port || 443
-      newNodeForm.value.config = data.config || {}
-      ElMessage.success('链接解析成功！请在右侧检查参数')
-      nodeActiveTab.value = 'manual'
+      const data = res.data.data;
+      newNodeForm.value.name = data.name || "";
+      newNodeForm.value.type = data.type || "vless";
+      newNodeForm.value.server = data.server || "";
+      newNodeForm.value.port = data.port || 443;
+      newNodeForm.value.config = data.config || {};
+      ElMessage.success("链接解析成功！请在右侧检查参数");
+      nodeActiveTab.value = "manual";
     } else {
-      throw new Error(res.data.message)
+      throw new Error(res.data.message);
     }
   } catch (error: any) {
-    ElMessage.error('解析失败: ' + (error.response?.data?.message || error.message))
+    ElMessage.error(
+      "解析失败: " + (error.response?.data?.message || error.message),
+    );
   } finally {
-    isParsingLink.value = false
+    isParsingLink.value = false;
   }
-}
+};
 
 const saveCustomNode = async () => {
-  if (!newNodeForm.value.name || !newNodeForm.value.server || !newNodeForm.value.port) {
-    ElMessage.warning('请补全基础信息（名称、服务器、端口）')
-    return
+  if (
+    !newNodeForm.value.name ||
+    !newNodeForm.value.server ||
+    !newNodeForm.value.port
+  ) {
+    ElMessage.warning("请补全基础信息（名称、服务器、端口）");
+    return;
   }
-  isSubmittingNode.value = true
-  
+  isSubmittingNode.value = true;
+
   // 同步基础信息到 config
-  newNodeForm.value.config.name = newNodeForm.value.name
-  newNodeForm.value.config.type = newNodeForm.value.type
-  newNodeForm.value.config.server = newNodeForm.value.server
-  newNodeForm.value.config.port = newNodeForm.value.port
+  newNodeForm.value.config.name = newNodeForm.value.name;
+  newNodeForm.value.config.type = newNodeForm.value.type;
+  newNodeForm.value.config.server = newNodeForm.value.server;
+  newNodeForm.value.config.port = newNodeForm.value.port;
 
   try {
     let res;
     if (editingNodeId.value) {
-      res = await axios.put(`http://localhost:8080/api/custom-nodes/${editingNodeId.value}`, newNodeForm.value)
+      res = await axios.put(
+        `http://localhost:8080/api/custom-nodes/${editingNodeId.value}`,
+        newNodeForm.value,
+      );
     } else {
-      res = await axios.post('http://localhost:8080/api/custom-nodes', newNodeForm.value)
+      res = await axios.post(
+        "http://localhost:8080/api/custom-nodes",
+        newNodeForm.value,
+      );
     }
     if (res.data.code === 200) {
-      ElMessage.success(editingNodeId.value ? '自定义节点更新成功！' : '自定义节点云端保存成功！')
-      nodeDialogVisible.value = false
-      await fetchCustomData()
+      ElMessage.success(
+        editingNodeId.value
+          ? "自定义节点更新成功！"
+          : "自定义节点云端保存成功！",
+      );
+      nodeDialogVisible.value = false;
+      await fetchCustomData();
       if (inputUrl.value) {
-        await handleDecode()
+        await handleDecode();
       }
     } else {
-      throw new Error(res.data.message)
+      throw new Error(res.data.message);
     }
   } catch (error: any) {
-    ElMessage.error('保存失败: ' + (error.response?.data?.message || error.message))
+    ElMessage.error(
+      "保存失败: " + (error.response?.data?.message || error.message),
+    );
   } finally {
-    isSubmittingNode.value = false
+    isSubmittingNode.value = false;
   }
-}
+};
 </script>
 
 <template>
@@ -518,7 +633,13 @@ const saveCustomNode = async () => {
         <h1 class="logo-title text-gradient">CLASH SUBSCRIPTION DECODER</h1>
       </div>
       <div class="header-actions">
-        <el-tag size="large" type="primary" effect="dark" round class="status-indicator">
+        <el-tag
+          size="large"
+          type="primary"
+          effect="dark"
+          round
+          class="status-indicator"
+        >
           <span class="pulse-dot"></span>后端就绪 (:8080)
         </el-tag>
       </div>
@@ -529,8 +650,11 @@ const saveCustomNode = async () => {
       <!-- 控制卡片面板 -->
       <section class="control-panel glass-card">
         <h2 class="section-title">自适应 Base64 地址获取器</h2>
-        <p class="section-desc">输入任意提供 Base64 编码数据的订阅地址或接口 URL，后端将自动请求、清洗并进行多重自适应解码。</p>
-        
+        <p class="section-desc">
+          输入任意提供 Base64 编码数据的订阅地址或接口
+          URL，后端将自动请求、清洗并进行多重自适应解码。
+        </p>
+
         <div class="input-area">
           <el-input
             v-model="inputUrl"
@@ -545,7 +669,7 @@ const saveCustomNode = async () => {
               <el-icon class="input-prefix-icon"><Link /></el-icon>
             </template>
           </el-input>
-          
+
           <div class="button-group">
             <el-button
               type="primary"
@@ -555,10 +679,10 @@ const saveCustomNode = async () => {
             >
               一键抓取并解码
             </el-button>
-            <el-button 
-              type="info" 
-              plain 
-              @click="handleQuickMock" 
+            <el-button
+              type="info"
+              plain
+              @click="handleQuickMock"
               :disabled="isLoading"
               class="mock-btn"
             >
@@ -593,24 +717,40 @@ const saveCustomNode = async () => {
             <div class="meta-info">
               <div class="meta-item">
                 <span class="meta-label">文件体积：</span>
-                <el-tag size="small" effect="plain" type="info">{{ (stats.size / 1024).toFixed(2) }} KB</el-tag>
+                <el-tag size="small" effect="plain" type="info"
+                  >{{ (stats.size / 1024).toFixed(2) }} KB</el-tag
+                >
               </div>
               <div class="meta-item">
                 <span class="meta-label">总行数：</span>
-                <el-tag size="small" effect="plain" type="info">{{ stats.lines }} 行</el-tag>
+                <el-tag size="small" effect="plain" type="info"
+                  >{{ stats.lines }} 行</el-tag
+                >
               </div>
               <div v-if="parsedNodes.length > 0" class="meta-item">
                 <span class="meta-label">检测到节点：</span>
-                <el-tag size="small" effect="dark" type="success">{{ parsedNodes.length }} 个</el-tag>
+                <el-tag size="small" effect="dark" type="success"
+                  >{{ parsedNodes.length }} 个</el-tag
+                >
               </div>
             </div>
-            
+
             <div class="result-actions">
               <el-button-group>
-                <el-button type="success" size="default" icon="CopyDocument" @click="handleCopy">
+                <el-button
+                  type="success"
+                  size="default"
+                  icon="CopyDocument"
+                  @click="handleCopy"
+                >
                   复制明文
                 </el-button>
-                <el-button type="primary" size="default" icon="Download" @click="handleDownload">
+                <el-button
+                  type="primary"
+                  size="default"
+                  icon="Download"
+                  @click="handleDownload"
+                >
                   导出 YAML
                 </el-button>
               </el-button-group>
@@ -622,45 +762,97 @@ const saveCustomNode = async () => {
             <!-- 节点预览页签 -->
             <el-tab-pane name="nodes" v-if="parsedNodes.length > 0">
               <template #label>
-                <span class="tab-label">⚡ 节点解析概览 ({{ parsedNodes.length }})</span>
+                <span class="tab-label"
+                  >⚡ 节点解析概览 ({{ parsedNodes.length }})</span
+                >
               </template>
-              <div class="nodes-header-actions" style="display:flex; justify-content:flex-end; margin-bottom: 16px;">
-                <el-button type="success" effect="dark" round @click="openNodeDialog">
-                  <span style="margin-right: 4px; font-weight: bold;">+</span> ✨ 新增自定义节点
+              <div
+                class="nodes-header-actions"
+                style="
+                  display: flex;
+                  justify-content: flex-end;
+                  margin-bottom: 16px;
+                "
+              >
+                <el-button
+                  type="success"
+                  effect="dark"
+                  round
+                  @click="openNodeDialog"
+                >
+                  <span style="margin-right: 4px; font-weight: bold">+</span> ✨
+                  新增自定义节点
                 </el-button>
               </div>
               <div class="nodes-grid">
-                <div v-for="(node, idx) in parsedNodes" :key="idx" class="node-card">
+                <div
+                  v-for="(node, idx) in parsedNodes"
+                  :key="idx"
+                  class="node-card"
+                >
                   <div class="node-card-header">
-                    <div style="display: flex; align-items: center; overflow: hidden; flex: 1;">
-                      <span class="node-flag">{{ getFlagEmoji(node.name) }}</span>
-                      <span class="node-name" :title="node.name">{{ node.name }}</span>
+                    <div
+                      style="
+                        display: flex;
+                        align-items: center;
+                        overflow: hidden;
+                        flex: 1;
+                      "
+                    >
+                      <span class="node-flag">{{
+                        getFlagEmoji(node.name)
+                      }}</span>
+                      <span class="node-name" :title="node.name">{{
+                        node.name
+                      }}</span>
                     </div>
-                    <div v-if="customNodesDict[node.name]" class="custom-actions" style="display: flex; gap: 4px;">
-                      <el-button type="primary" link :icon="Edit" @click="editCustomNode(node.name)" title="编辑云端节点"></el-button>
-                      <el-button type="danger" link :icon="Delete" @click="deleteCustomNode(node.name)" title="删除云端节点"></el-button>
+                    <div
+                      v-if="customNodesDict[node.name]"
+                      class="custom-actions"
+                      style="display: flex; gap: 4px"
+                    >
+                      <el-button
+                        type="primary"
+                        link
+                        :icon="Edit"
+                        @click="editCustomNode(node.name)"
+                        title="编辑云端节点"
+                      ></el-button>
+                      <el-button
+                        type="danger"
+                        link
+                        :icon="Delete"
+                        @click="deleteCustomNode(node.name)"
+                        title="删除云端节点"
+                      ></el-button>
                     </div>
                   </div>
                   <div class="node-card-body">
                     <div class="node-info-row">
                       <span class="info-label">地址:</span>
-                      <span class="info-val" :title="node.server">{{ node.server }}</span>
+                      <span class="info-val" :title="node.server">{{
+                        node.server
+                      }}</span>
                     </div>
                     <div class="node-info-row">
                       <span class="info-label">端口:</span>
-                      <span class="info-val highlight-port">{{ node.port }}</span>
+                      <span class="info-val highlight-port">{{
+                        node.port
+                      }}</span>
                     </div>
                   </div>
                   <div class="node-card-footer">
-                    <el-tag 
-                      size="small" 
-                      :type="getNodeTypeTag(node.type).type" 
+                    <el-tag
+                      size="small"
+                      :type="getNodeTypeTag(node.type).type"
                       effect="dark"
                       class="node-type-tag"
                     >
                       {{ getNodeTypeTag(node.type).label }}
                     </el-tag>
-                    <span v-if="node.details.cipher" class="cipher-label">{{ node.details.cipher }}</span>
+                    <span v-if="node.details.cipher" class="cipher-label">{{
+                      node.details.cipher
+                    }}</span>
                   </div>
                 </div>
               </div>
@@ -669,30 +861,79 @@ const saveCustomNode = async () => {
             <!-- 代理组页签 -->
             <el-tab-pane name="groups" v-if="proxyGroups.length > 0">
               <template #label>
-                <span class="tab-label">🗂️ 代理组策略 ({{ proxyGroups.length }})</span>
+                <span class="tab-label"
+                  >🗂️ 代理组策略 ({{ proxyGroups.length }})</span
+                >
               </template>
-              
-              <div class="groups-header-actions" style="display:flex; justify-content:flex-end; margin-bottom: 16px;">
-                <el-button type="primary" effect="dark" round @click="openGroupDialog">
-                  <span style="margin-right: 4px; font-weight: bold;">+</span> 新增自定义策略组
+
+              <div
+                class="groups-header-actions"
+                style="
+                  display: flex;
+                  justify-content: flex-end;
+                  margin-bottom: 16px;
+                "
+              >
+                <el-button
+                  type="primary"
+                  effect="dark"
+                  round
+                  @click="openGroupDialog"
+                >
+                  <span style="margin-right: 4px; font-weight: bold">+</span>
+                  新增自定义策略组
                 </el-button>
               </div>
 
               <div class="groups-grid">
-                <div v-for="(group, idx) in proxyGroups" :key="idx" class="group-card">
+                <div
+                  v-for="(group, idx) in proxyGroups"
+                  :key="idx"
+                  class="group-card"
+                >
                   <div class="group-card-header">
-                    <div style="display: flex; align-items: center; overflow: hidden; flex: 1; gap: 8px;">
+                    <div
+                      style="
+                        display: flex;
+                        align-items: center;
+                        overflow: hidden;
+                        flex: 1;
+                        gap: 8px;
+                      "
+                    >
                       <span class="group-name">{{ group.name }}</span>
-                      <el-tag size="small" type="primary" effect="dark" class="group-type-tag">{{ group.type }}</el-tag>
+                      <el-tag
+                        size="small"
+                        type="primary"
+                        effect="dark"
+                        class="group-type-tag"
+                        >{{ group.type }}</el-tag
+                      >
                     </div>
-                    <div v-if="customGroupsDict[group.name]" class="custom-actions" style="display: flex; gap: 4px;">
-                      <el-button type="primary" link :icon="Edit" @click="editCustomGroup(group.name)" title="编辑策略组"></el-button>
-                      <el-button type="danger" link :icon="Delete" @click="deleteCustomGroup(group.name)" title="删除策略组"></el-button>
+                    <div
+                      v-if="customGroupsDict[group.name]"
+                      class="custom-actions"
+                      style="display: flex; gap: 4px"
+                    >
+                      <el-button
+                        type="primary"
+                        link
+                        :icon="Edit"
+                        @click="editCustomGroup(group.name)"
+                        title="编辑策略组"
+                      ></el-button>
+                      <el-button
+                        type="danger"
+                        link
+                        :icon="Delete"
+                        @click="deleteCustomGroup(group.name)"
+                        title="删除策略组"
+                      ></el-button>
                     </div>
                   </div>
                   <div class="group-card-body">
-                    <el-tag 
-                      v-for="proxy in group.proxies" 
+                    <el-tag
+                      v-for="proxy in group.proxies"
                       :key="proxy"
                       size="small"
                       effect="plain"
@@ -710,37 +951,72 @@ const saveCustomNode = async () => {
             <!-- 规则列表页签 -->
             <el-tab-pane name="rules" v-if="parsedConfig?.rules?.length > 0">
               <template #label>
-                <span class="tab-label">📋 分流规则 ({{ parsedConfig.rules.length }})</span>
+                <span class="tab-label"
+                  >📋 分流规则 ({{ parsedConfig.rules.length }})</span
+                >
               </template>
-              
+
               <div class="rules-container glass-card">
-                <div class="rules-toolbar">
+                <div class="rules-toolbar" style="display: flex; gap: 15px;">
+                  <el-select 
+                    v-model="ruleTargetFilter" 
+                    placeholder="目标策略过滤" 
+                    clearable 
+                    filterable
+                    style="width: 220px;"
+                    popper-class="glass-dropdown"
+                  >
+                    <el-option label="[全部策略]" value="" />
+                    <el-option v-for="t in ruleTargets" :key="t" :label="t" :value="t" />
+                  </el-select>
                   <el-input
                     v-model="ruleSearchQuery"
-                    placeholder="输入关键字检索规则类型、内容或策略..."
+                    placeholder="输入关键字进一步检索规则类型或内容..."
                     clearable
                     class="rule-search-input"
+                    style="flex: 1;"
                   >
                     <template #prefix>
-                      <span style="font-size: 16px;">🔍</span>
+                      <span style="font-size: 16px">🔍</span>
                     </template>
                   </el-input>
                 </div>
-                
-                <el-table :data="paginatedRules" height="500" class="custom-table" style="width: 100%">
+
+                <el-table
+                  :data="paginatedRules"
+                  height="500"
+                  class="custom-table"
+                  style="width: 100%"
+                >
                   <el-table-column prop="type" label="规则类型" width="160">
                     <template #default="scope">
-                      <el-tag size="small" effect="dark" type="warning" class="rule-type-tag">{{ scope.row.type }}</el-tag>
+                      <el-tag
+                        size="small"
+                        effect="dark"
+                        type="warning"
+                        class="rule-type-tag"
+                        >{{ scope.row.type }}</el-tag
+                      >
                     </template>
                   </el-table-column>
-                  <el-table-column prop="payload" label="匹配内容" show-overflow-tooltip>
+                  <el-table-column
+                    prop="payload"
+                    label="匹配内容"
+                    show-overflow-tooltip
+                  >
                     <template #default="scope">
                       <span class="rule-payload">{{ scope.row.payload }}</span>
                     </template>
                   </el-table-column>
                   <el-table-column prop="target" label="目标策略" width="220">
                     <template #default="scope">
-                      <el-tag size="small" effect="plain" type="success" class="rule-target-tag">{{ scope.row.target }}</el-tag>
+                      <el-tag
+                        size="small"
+                        effect="plain"
+                        type="success"
+                        class="rule-target-tag"
+                        >{{ scope.row.target }}</el-tag
+                      >
                     </template>
                   </el-table-column>
                 </el-table>
@@ -768,7 +1044,12 @@ const saveCustomNode = async () => {
                 <codemirror
                   v-model="result.decoded"
                   :extensions="cmExtensions"
-                  :style="{ minHeight: '400px', maxHeight: '600px', fontSize: '14px', borderRadius: '12px' }"
+                  :style="{
+                    minHeight: '400px',
+                    maxHeight: '600px',
+                    fontSize: '14px',
+                    borderRadius: '12px',
+                  }"
                   :indent-with-tab="true"
                   :tab-size="2"
                 />
@@ -781,7 +1062,9 @@ const saveCustomNode = async () => {
                 <span class="tab-label">🔗 原始 Base64 截断</span>
               </template>
               <div class="code-wrapper">
-                <div class="code-container raw-base64-text">{{ result.raw_base64 }}</div>
+                <div class="code-container raw-base64-text">
+                  {{ result.raw_base64 }}
+                </div>
               </div>
             </el-tab-pane>
           </el-tabs>
@@ -790,147 +1073,273 @@ const saveCustomNode = async () => {
     </main>
 
     <!-- 自定义策略组弹窗 -->
-    <el-dialog 
-      v-model="groupDialogVisible" 
-      :title="editingGroupId ? '✨ 编辑云端自定义策略组' : '✨ 新增云端自定义策略组'" 
-      width="550px" 
+    <el-dialog
+      v-model="groupDialogVisible"
+      :title="
+        editingGroupId ? '✨ 编辑云端自定义策略组' : '✨ 新增云端自定义策略组'
+      "
+      width="550px"
       class="glass-dialog"
     >
       <el-form label-position="top">
         <el-form-item label="策略组名称">
-          <el-input v-model="newGroupForm.name" placeholder="例如：我的超强备用线路"></el-input>
+          <el-input
+            v-model="newGroupForm.name"
+            placeholder="例如：我的超强备用线路"
+          ></el-input>
         </el-form-item>
         <el-form-item label="策略类型 (Type)">
           <el-select v-model="newGroupForm.type" style="width: 100%">
-            <el-option v-for="t in groupTypes" :key="t" :label="t.toUpperCase()" :value="t" />
+            <el-option
+              v-for="t in groupTypes"
+              :key="t"
+              :label="t.toUpperCase()"
+              :value="t"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="配置包含的目标代理">
-          <div style="margin-bottom: 12px; display: flex; gap: 10px;">
-            <el-button size="small" type="primary" plain @click="selectAllNodes">
+          <div style="margin-bottom: 12px; display: flex; gap: 10px">
+            <el-button
+              size="small"
+              type="primary"
+              plain
+              @click="selectAllNodes"
+            >
               注入全部最新节点 [ALL_NODES]
             </el-button>
-            <el-button size="small" type="info" plain @click="selectAllExistingGroups">
+            <el-button
+              size="small"
+              type="info"
+              plain
+              @click="selectAllExistingGroups"
+            >
               引入所有现有策略组
             </el-button>
           </div>
-          <el-select 
-            v-model="newGroupForm.proxies" 
-            multiple 
-            filterable 
+          <el-select
+            v-model="newGroupForm.proxies"
+            multiple
+            filterable
             placeholder="请选择需要包含的代理..."
             style="width: 100%"
             popper-class="glass-dropdown"
           >
-            <el-option label="🌟 动态注入当前订阅全节点 [ALL_NODES]" value="[ALL_NODES]" />
+            <el-option
+              label="🌟 动态注入当前订阅全节点 [ALL_NODES]"
+              value="[ALL_NODES]"
+            />
             <el-option-group label="现有策略组">
-              <el-option v-for="g in proxyGroups" :key="g.name" :label="g.name" :value="g.name" />
+              <el-option
+                v-for="g in proxyGroups"
+                :key="g.name"
+                :label="g.name"
+                :value="g.name"
+              />
             </el-option-group>
             <el-option-group label="现有独立节点">
-              <el-option v-for="n in parsedNodes" :key="n.name" :label="n.name" :value="n.name" />
+              <el-option
+                v-for="n in parsedNodes"
+                :key="n.name"
+                :label="n.name"
+                :value="n.name"
+              />
             </el-option-group>
           </el-select>
         </el-form-item>
         <el-form-item label="排除节点关键字或正则 (Exclude) - 极简可选">
-          <el-input v-model="newGroupForm.exclude" placeholder="例如：特殊专线" clearable></el-input>
-          <p style="font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">
+          <el-input
+            v-model="newGroupForm.exclude"
+            placeholder="例如：特殊专线"
+            clearable
+          ></el-input>
+          <p
+            style="
+              font-size: 12px;
+              color: var(--text-secondary);
+              margin-top: 4px;
+              line-height: 1.4;
+            "
+          >
             仅当您有特殊的跨组排除需求时（如特定节点总是断流），才在此处填入正则表达式。
           </p>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="groupDialogVisible = false" plain>取消</el-button>
-        <el-button type="primary" @click="saveCustomGroup" :loading="isSubmittingGroup">
-          {{ editingGroupId ? '更新并立即云端同步' : '保存并立即云端同步' }}
+        <el-button
+          type="primary"
+          @click="saveCustomGroup"
+          :loading="isSubmittingGroup"
+        >
+          {{ editingGroupId ? "更新并立即云端同步" : "保存并立即云端同步" }}
         </el-button>
       </template>
     </el-dialog>
 
     <!-- 自定义节点弹窗 -->
-    <el-dialog 
-      v-model="nodeDialogVisible" 
-      :title="editingNodeId ? '✨ 编辑云端自定义节点' : '✨ 新增云端自定义节点'" 
-      width="600px" 
+    <el-dialog
+      v-model="nodeDialogVisible"
+      :title="editingNodeId ? '✨ 编辑云端自定义节点' : '✨ 新增云端自定义节点'"
+      width="600px"
       class="glass-dialog"
     >
       <el-tabs v-model="nodeActiveTab" class="custom-tabs node-dialog-tabs">
         <el-tab-pane label="🔗 链接智能导入" name="link">
-          <div style="padding: 10px 0;">
-            <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 14px;">
-              支持自动解析 vless://, hysteria2://, ss://, socks5:// 等分享链接，一键提取核心参数。
+          <div style="padding: 10px 0">
+            <p
+              style="
+                color: var(--text-secondary);
+                margin-bottom: 15px;
+                font-size: 14px;
+              "
+            >
+              支持自动解析 vless://, hysteria2://, ss://, socks5://
+              等分享链接，一键提取核心参数。
             </p>
-            <el-input 
-              v-model="nodeLinkForm.link" 
-              type="textarea" 
-              :rows="4" 
+            <el-input
+              v-model="nodeLinkForm.link"
+              type="textarea"
+              :rows="4"
               placeholder="请粘贴您的节点链接..."
             ></el-input>
-            <div style="margin-top: 15px; text-align: right;">
-              <el-button type="primary" @click="parseNodeLink" :loading="isParsingLink">一键解析链接</el-button>
+            <div style="margin-top: 15px; text-align: right">
+              <el-button
+                type="primary"
+                @click="parseNodeLink"
+                :loading="isParsingLink"
+                >一键解析链接</el-button
+              >
             </div>
           </div>
         </el-tab-pane>
 
         <el-tab-pane label="✍️ 手动配置调整" name="manual">
-          <el-form label-position="left" label-width="80px" style="padding: 10px 0; max-height: 400px; overflow-y: auto;">
+          <el-form
+            label-position="left"
+            label-width="80px"
+            style="padding: 10px 0; max-height: 400px; overflow-y: auto"
+          >
             <el-form-item label="节点名称">
-              <el-input v-model="newNodeForm.name" placeholder="请输入节点显示的名称"></el-input>
+              <el-input
+                v-model="newNodeForm.name"
+                placeholder="请输入节点显示的名称"
+              ></el-input>
             </el-form-item>
             <el-form-item label="协议类型">
               <el-select v-model="newNodeForm.type" style="width: 100%">
-                <el-option v-for="t in nodeTypes" :key="t" :label="t.toUpperCase()" :value="t" />
+                <el-option
+                  v-for="t in nodeTypes"
+                  :key="t"
+                  :label="t.toUpperCase()"
+                  :value="t"
+                />
               </el-select>
             </el-form-item>
             <el-form-item label="服务器">
-              <el-input v-model="newNodeForm.server" placeholder="例如：example.com 或 IP"></el-input>
+              <el-input
+                v-model="newNodeForm.server"
+                placeholder="例如：example.com 或 IP"
+              ></el-input>
             </el-form-item>
             <el-form-item label="端口">
-              <el-input-number v-model="newNodeForm.port" :min="1" :max="65535" style="width: 100%"></el-input-number>
+              <el-input-number
+                v-model="newNodeForm.port"
+                :min="1"
+                :max="65535"
+                style="width: 100%"
+              ></el-input-number>
             </el-form-item>
             <el-form-item label="UDP 转发">
-              <el-switch v-model="newNodeForm.config['udp']" active-text="开启" inactive-text="关闭" />
-              <div style="font-size: 12px; color: var(--text-secondary); margin-left: 15px; display: inline-block;">
+              <el-switch
+                v-model="newNodeForm.config['udp']"
+                active-text="开启"
+                inactive-text="关闭"
+              />
+              <div
+                style="
+                  font-size: 12px;
+                  color: var(--text-secondary);
+                  margin-left: 15px;
+                  display: inline-block;
+                "
+              >
                 开启以支持转发 STUN 及其他 UDP 协议包
               </div>
             </el-form-item>
             <el-form-item label="前置拨号 (dialer-proxy)">
-              <el-select 
-                v-model="newNodeForm.config['dialer-proxy']" 
-                clearable 
-                filterable 
+              <el-select
+                v-model="newNodeForm.config['dialer-proxy']"
+                clearable
+                filterable
                 placeholder="（可选）选择前置代理名，留空则直连"
                 style="width: 100%"
                 popper-class="glass-dropdown"
               >
                 <el-option-group label="现有策略组">
-                  <el-option v-for="g in proxyGroups" :key="g.name" :label="g.name" :value="g.name" />
+                  <el-option
+                    v-for="g in proxyGroups"
+                    :key="g.name"
+                    :label="g.name"
+                    :value="g.name"
+                  />
                 </el-option-group>
                 <el-option-group label="现有独立节点">
-                  <el-option v-for="n in parsedNodes" :key="n.name" :label="n.name" :value="n.name" />
+                  <el-option
+                    v-for="n in parsedNodes"
+                    :key="n.name"
+                    :label="n.name"
+                    :value="n.name"
+                  />
                 </el-option-group>
               </el-select>
-              <p style="font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;">
-                最新内核移除了 relay，链式代理现由前置拨号 (dialer-proxy) 原生接管。
+              <p
+                style="
+                  font-size: 12px;
+                  color: var(--text-secondary);
+                  margin-top: 4px;
+                  line-height: 1.4;
+                "
+              >
+                最新内核移除了 relay，链式代理现由前置拨号 (dialer-proxy)
+                原生接管。
               </p>
             </el-form-item>
             <el-form-item label="详细配置">
-              <p style="font-size: 12px; color: var(--text-secondary); margin-top: 0; line-height: 1.4;">
-                高级参数（如 uuid, tls, network 等），将作为 JSON 对象合并到该节点配置中。<br/>
+              <p
+                style="
+                  font-size: 12px;
+                  color: var(--text-secondary);
+                  margin-top: 0;
+                  line-height: 1.4;
+                "
+              >
+                高级参数（如 uuid, tls, network 等），将作为 JSON
+                对象合并到该节点配置中。<br />
                 解析链接后，这里会预先填充。如需手动输入格式请使用合法的 JSON。
               </p>
               <codemirror
                 v-model="configString"
                 :extensions="cmExtensions"
-                :style="{ width: '100%', maxHeight: '200px', fontSize: '13px', borderRadius: '8px' }"
+                :style="{
+                  width: '100%',
+                  maxHeight: '200px',
+                  fontSize: '13px',
+                  borderRadius: '8px',
+                }"
                 :indent-with-tab="true"
                 :tab-size="2"
               />
             </el-form-item>
           </el-form>
-          <div style="margin-top: 20px; text-align: right;">
+          <div style="margin-top: 20px; text-align: right">
             <el-button @click="nodeDialogVisible = false" plain>取消</el-button>
-            <el-button type="success" @click="saveCustomNode" :loading="isSubmittingNode">
-              {{ editingNodeId ? '确认并更新云端' : '确认并存入云端' }}
+            <el-button
+              type="success"
+              @click="saveCustomNode"
+              :loading="isSubmittingNode"
+            >
+              {{ editingNodeId ? "确认并更新云端" : "确认并存入云端" }}
             </el-button>
           </div>
         </el-tab-pane>
@@ -939,7 +1348,10 @@ const saveCustomNode = async () => {
 
     <!-- 页脚版权说明 -->
     <footer class="main-footer">
-      <p>Base64 Subscription Analyzer & Decoder © 2026. Built with Gin & Vue 3 + Element Plus.</p>
+      <p>
+        Base64 Subscription Analyzer & Decoder © 2026. Built with Gin & Vue 3 +
+        Element Plus.
+      </p>
     </footer>
   </div>
 </template>
@@ -979,8 +1391,12 @@ const saveCustomNode = async () => {
 }
 
 @keyframes float-icon {
-  0% { transform: translateY(0) scale(1); }
-  100% { transform: translateY(-4px) scale(1.1); }
+  0% {
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    transform: translateY(-4px) scale(1.1);
+  }
 }
 
 .logo-title {
@@ -1076,16 +1492,16 @@ const saveCustomNode = async () => {
   border-radius: 12px !important;
   padding: 20px 24px !important;
   font-size: 14px !important;
-  background-color: rgba(255,255,255,0.02) !important;
-  border-color: rgba(255,255,255,0.08) !important;
+  background-color: rgba(255, 255, 255, 0.02) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
   color: var(--text-secondary) !important;
   transition: all 0.3s !important;
 }
 
 .mock-btn:hover {
-  background-color: rgba(255,255,255,0.06) !important;
+  background-color: rgba(255, 255, 255, 0.06) !important;
   color: var(--text-primary) !important;
-  border-color: rgba(255,255,255,0.18) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
 }
 
 .error-alert {
@@ -1245,7 +1661,7 @@ const saveCustomNode = async () => {
   font-size: 11px;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  background: rgba(255,255,255,0.03);
+  background: rgba(255, 255, 255, 0.03);
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -1265,10 +1681,12 @@ const saveCustomNode = async () => {
 }
 
 /* 动画定义 */
-.fade-enter-active, .fade-leave-active {
+.fade-enter-active,
+.fade-leave-active {
   transition: opacity 0.3s ease;
 }
-.fade-enter-from, .fade-leave-to {
+.fade-enter-from,
+.fade-leave-to {
   opacity: 0;
 }
 
@@ -1285,7 +1703,9 @@ const saveCustomNode = async () => {
   margin-top: 20px;
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.5), 0 4px 15px rgba(0, 0, 0, 0.2);
+  box-shadow:
+    inset 0 2px 10px rgba(0, 0, 0, 0.5),
+    0 4px 15px rgba(0, 0, 0, 0.2);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -1306,7 +1726,8 @@ const saveCustomNode = async () => {
   color: var(--text-muted) !important;
 }
 
-.editor-glass-wrapper :deep(.cm-activeLine), .editor-glass-wrapper :deep(.cm-activeLineGutter) {
+.editor-glass-wrapper :deep(.cm-activeLine),
+.editor-glass-wrapper :deep(.cm-activeLineGutter) {
   background-color: rgba(255, 255, 255, 0.04) !important;
 }
 
