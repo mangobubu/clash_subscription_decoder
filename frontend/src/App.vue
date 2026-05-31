@@ -49,8 +49,9 @@ const generateSubLink = async () => {
     const res = await axios.post("http://localhost:8080/api/generate-sub-token");
     if (res.data.code === 200) {
       const token = res.data.data.token;
-      // 构建完整的 URL
-      finalSubLink.value = `http://localhost:8080/sub?token=${token}`;
+      // 动态提取当前浏览器访问的主机协议与域名进行拼装，实现 100% 动态自适应
+      const origin = window.location.origin;
+      finalSubLink.value = `${origin}/sub?token=${token}`;
       subLinkDialogVisible.value = true;
     } else {
       ElMessage.error(res.data.message || "生成失败");
