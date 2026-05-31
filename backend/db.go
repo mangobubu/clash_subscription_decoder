@@ -81,16 +81,46 @@ type Subscription struct {
 
 
 func initDB() {
+	var cfg Config
 	configData, err := os.ReadFile("config.toml")
-	if err != nil {
-		log.Fatalf("Failed to read config.toml: %v", err)
+	if err == nil {
+		err = toml.Unmarshal(configData, &cfg)
+		if err != nil {
+			log.Fatalf("Failed to unmarshal config.toml: %v", err)
+		}
+	} else {
+		log.Println("config.toml not found, relying on environment variables or default values.")
+		cfg.Database.Port = 5432
+		cfg.Database.SSLMode = "disable"
+		cfg.Database.TimeZone = "Asia/Shanghai"
 	}
 
-	var cfg Config
-	err = toml.Unmarshal(configData, &cfg)
-	if err != nil {
-		log.Fatalf("Failed to unmarshal config.toml: %v", err)
+	// 针对云原生部署：从环境变量读取并覆写数据库配置
+	if envHost := os.Getenv("DB_HOST"); envHost != "" {
+		cfg.Database.Host = envHost
 	}
+	if envUser := os.Getenv("DB_USER"); envUser != "" {
+		cfg.Database.User = envUser
+	}
+	if envPassword := os.Getenv("DB_PASSWORD"); envPassword != "" {
+		cfg.Database.Password = envPassword
+	}
+	if envDBName := os.Getenv("DB_NAME"); envDBName != "" {
+		cfg.Database.DBName = envDBName
+	}
+	if envPort := os.Getenv("DB_PORT"); envPort != "" {
+		var p int
+		if _, err := fmt.Sscanf(envPort, "%d", &p); err == nil {
+			cfg.Database.Port = p
+		}
+	}
+	if envSSLMode := os.Getenv("DB_SSLMODE"); envSSLMode != "" {
+		cfg.Database.SSLMode = envSSLMode
+	}
+	if envTimeZone := os.Getenv("DB_TIMEZONE"); envTimeZone != "" {
+		cfg.Database.TimeZone = envTimeZone
+	}
+
 	AppConfig = cfg
 
 	passKey := string([]byte{'p', 'a', 's', 's', 'w', 'o', 'r', 'd'})

@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   # =========================================================
-  # ClashSubAST 全栈应用服务
+  # ClashSubAST 全栈应用服务 (连接外部已有的 PostgreSQL)
   # =========================================================
   app:
     build:
@@ -11,36 +11,12 @@ services:
     container_name: clash-sub-ast-app
     ports:
       - "8080:8080"
-    volumes:
-      # 挂载宿主机当前的 config.toml，方便在宿主机直接修改密码等核心配置
-      - ./config.toml:/app/config.toml
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: always
-
-  # =========================================================
-  # PostgreSQL 数据库服务
-  # =========================================================
-  db:
-    image: postgres:15-alpine
-    container_name: clash-sub-ast-db
     environment:
-      POSTGRES_USER: clash_proxy_user
-      POSTGRES_PASSWORD: secure_db_password_9988
-      POSTGRES_DB: clash_proxy_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      # 内置健康检测，保证数据库完全就绪并能接受连接后，才允许 app 容器拉起运行
-      test: ["CMD-SHELL", "pg_isready -U clash_proxy_user -d clash_proxy_db"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      - DB_HOST=your_external_postgres_host   # 外部 PostgreSQL 主机地址
+      - DB_USER=clash_proxy_user              # 外部数据库用户名
+      - DB_PASSWORD=secure_db_password_9988   # 外部数据库密码
+      - DB_NAME=clash_proxy_db                # 外部数据库名称
+      - DB_PORT=5432                          # 外部数据库端口
+      - DB_SSLMODE=disable                    # SSL模式 (disable/require等)
+      - DB_TIMEZONE=Asia/Shanghai             # 时区设置
     restart: always
-
-volumes:
-  pgdata:
-    name: clash-sub-ast-pgdata
