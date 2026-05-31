@@ -90,9 +90,18 @@ func initDB() {
 		}
 	} else {
 		log.Println("config.toml not found, relying on environment variables or default values.")
+		// 数据库默认退避参数
 		cfg.Database.Port = 5432
 		cfg.Database.SSLMode = "disable"
 		cfg.Database.TimeZone = "Asia/Shanghai"
+
+		// 验证码默认退避参数，防止图片拉起产生零值异常
+		cfg.Auth.CaptchaEnabled = true
+		cfg.Auth.CaptchaLength = 5
+		cfg.Auth.CaptchaWidth = 160
+		cfg.Auth.CaptchaHeight = 60
+		cfg.Auth.CaptchaBgColor = "rgba(15, 23, 42, 0.6)"
+		cfg.Auth.CaptchaTextColor = "#FFFFFF"
 	}
 
 	// 针对云原生部署：从环境变量读取并覆写数据库配置
@@ -119,6 +128,11 @@ func initDB() {
 	}
 	if envTimeZone := os.Getenv("DB_TIMEZONE"); envTimeZone != "" {
 		cfg.Database.TimeZone = envTimeZone
+	}
+
+	// 针对云原生部署：从环境变量读取并覆写验证码开关配置
+	if envCaptcha := os.Getenv("CAPTCHA_ENABLED"); envCaptcha != "" {
+		cfg.Auth.CaptchaEnabled = (envCaptcha == "true")
 	}
 
 	AppConfig = cfg

@@ -181,16 +181,13 @@ cd release
 
 如果您希望在生产环境中利用 Docker 进行轻量化一键部署与管理，项目已内置了高水准的容器化支持：
 - **多阶段构建 Dockerfile**：编译环境与生产运行环境物理隔离，最终生成的生产镜像仅约为 50MB。
-- **一键容器编排**：联调拉起 ClashSubAST 主服务与持久化的 PostgreSQL 数据库，内置数据库健康检查与服务依赖。
+- **云原生一键容器编排**：内置了隔离的自定义 Docker 网络组，且全量支持通过环境变量配置外部数据库与连接参数，零挂载实现秒速启动。
 
 ### 1. 快速一键拉起
-在安装了 Docker 及 Docker Compose 的服务器上，仅需执行以下两步即可完成全栈极速部署：
+在安装了 Docker 及 Docker Compose 的服务器上，直接配置好 `docker-compose.yml` 中的环境变量后，仅需运行以下一行命令即可拉起服务：
 
 ```bash
-# 步骤一：拷贝并使用专为 Docker 容器网络预调优的默认配置文件
-cp config.docker.toml config.toml
-
-# 步骤二：一键在后台启动所有容器服务 (含高并发 Go 主应用与 PostgreSQL 数据库)
+# 一键在后台启动 ClashSubAST 独立服务 (自动与隔离的网络组及外部 PostgreSQL 数据库建立连接)
 docker compose up -d
 ```
 
