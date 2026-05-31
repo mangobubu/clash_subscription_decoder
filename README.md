@@ -207,6 +207,17 @@ docker compose down
 * **配置文件更新**：您可以直接在宿主机修改根目录下的 `config.toml` 文件，修改后运行 `docker compose restart app` 重启应用容器即可使最新配置生效。
 * **数据库持久化**：数据库的数据会被安全地保存在 Docker Named Volume `clash-sub-ast-pgdata` 中，即使容器群被完全删除重建，您的数据依然完好无损。
 
+### 4. 容器热更新与滚动重启
+当项目代码库有最新提交或您在本地做出了配置修改时，直接在服务器项目根目录下执行以下命令，Docker Compose 就会全自动在后台编译新镜像并滚动更新替换旧容器（仅需 1-2 秒，实现零停机感）：
+
+```bash
+# 一键编译新镜像并后台滚动更新应用容器
+docker compose up -d --build
+
+# (建议) 运行下方命令清理重构时产生的虚悬无用镜像，释放服务器磁盘空间
+docker image prune -f
+```
+
 ---
 
 ## 📄 开源协议
