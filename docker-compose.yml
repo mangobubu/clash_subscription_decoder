@@ -18,16 +18,12 @@ services:
       - DB_SSLMODE=disable                    # SSL模式 (disable/require等)
       - DB_TIMEZONE=Asia/Shanghai             # 时区设置
     networks:
-      - clash-sub-ast-net                    # 将服务绑定至自定义网络组
+      - 1panel-network                        # 将服务绑定至 1Panel 的外部网络组
     restart: always
 
 networks:
   # =========================================================
-  # 自定义 Docker 隔离网络组
+  # 声明接入 1Panel 宿主机上已有的外部共享网络组
   # =========================================================
-  clash-sub-ast-net:
-    name: clash-sub-ast-net                  # 网络组名称
-    driver: bridge                           # 驱动类型：桥接隔离模式
-    # 💡 提示：如果您希望该容器直接加入已存在的外部共享 Docker 网络组
-    #（例如与宿主机上其他独立运行的 PostgreSQL 数据库容器网络打通），请取消下方两行注释：
-    # external: true
+  1panel-network:
+    external: true                            # 声明为外部已存在的网络，由 Compose 直接接入而无需重复创建
