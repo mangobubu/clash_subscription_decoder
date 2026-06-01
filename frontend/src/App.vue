@@ -14,11 +14,22 @@ import { buildPublicBackendUrl } from "./config/backend";
 
 const isLoggedIn = ref(false);
 const isVerifying = ref(true);
+const isInitialDataLoading = ref(false);
+
+const isAppBootstrapping = computed(() => isVerifying.value || isInitialDataLoading.value);
+const appBootstrapTitle = computed(() =>
+  isVerifying.value ? "正在验证登录状态" : "正在加载数据库数据",
+);
+const appBootstrapDesc = computed(() =>
+  isVerifying.value
+    ? "正在确认当前会话，请稍候。"
+    : "正在读取订阅、自定义节点、策略组和分流规则，加载完成前暂不可操作。",
+);
 
 const onLoginSuccess = async () => {
+  isInitialDataLoading.value = true;
   isLoggedIn.value = true;
-  await fetchCustomData();
-  await loadSubscription();
+  await loadInitialAppData();
 };
 
 // CodeMirror 配置
@@ -174,9 +185,20 @@ const fetchCustomData = async () => {
   }
 };
 
+const loadInitialAppData = async () => {
+  isInitialDataLoading.value = true;
+  try {
+    await fetchCustomData();
+    await loadSubscription();
+  } finally {
+    isInitialDataLoading.value = false;
+  }
+};
+
 onMounted(async () => {
   window.addEventListener('auth-failed', () => {
     isLoggedIn.value = false;
+    isInitialDataLoading.value = false;
   });
 
   const token = localStorage.getItem('token');
@@ -184,8 +206,8 @@ onMounted(async () => {
     try {
       await axios.get('http://localhost:8080/api/verify');
       isLoggedIn.value = true;
-      await fetchCustomData();
-      await loadSubscription();
+      isVerifying.value = false;
+      await loadInitialAppData();
     } catch {
       localStorage.removeItem('token');
     }
@@ -1104,8 +1126,39 @@ const submitChangePassword = async () => {
 </script>
 
 <template>
-  <div v-if="isVerifying" class="app-loading">
-    <el-icon class="is-loading"><Loading /></el-icon>
+  <div v-if="isAppBootstrapping" class="app-bootstrap">
+    <div class="bootstrap-shell">
+      <header class="bootstrap-header glass-card">
+        <div class="bootstrap-brand">
+          <span class="bootstrap-logo">⚡</span>
+          <div>
+            <div class="bootstrap-brand-title">CLASH SUBSCRIPTION DECODER</div>
+            <div class="bootstrap-brand-subtitle">安全控制台初始化中</div>
+          </div>
+        </div>
+        <div class="bootstrap-status">
+          <span class="pulse-dot"></span>
+          数据加载中
+        </div>
+      </header>
+
+      <section class="bootstrap-panel glass-card">
+        <div class="bootstrap-copy">
+          <el-icon class="is-loading bootstrap-icon"><Loading /></el-icon>
+          <div>
+            <h2>{{ appBootstrapTitle }}</h2>
+            <p>{{ appBootstrapDesc }}</p>
+          </div>
+        </div>
+        <el-skeleton :rows="4" animated />
+      </section>
+
+      <section class="bootstrap-grid">
+        <div v-for="item in 3" :key="item" class="bootstrap-card glass-card">
+          <el-skeleton :rows="5" animated />
+        </div>
+      </section>
+    </div>
   </div>
   <Login v-else-if="!isLoggedIn" @login-success="onLoginSuccess" />
   <div v-else class="app-container">
@@ -2738,14 +2791,133 @@ const submitChangePassword = async () => {
   font-weight: bold;
 }
 
-.app-loading {
+.app-bootstrap {
+  width: 100%;
+  min-height: 100vh;
+  padding: 30px 20px;
+  box-sizing: border-box;
+  background-color: var(--bg-primary);
+}
+
+.bootstrap-shell {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.bootstrap-header {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  height: 100vh;
-  font-size: 48px;
+  gap: 20px;
+  padding: 20px 30px;
+  border-radius: 20px;
+}
+
+.bootstrap-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.bootstrap-logo {
+  flex: 0 0 auto;
+  font-size: 28px;
+  animation: float-icon 3s ease-in-out infinite alternate;
+}
+
+.bootstrap-brand-title {
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.bootstrap-brand-subtitle {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.bootstrap-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  color: #bfdbfe;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.bootstrap-panel {
+  padding: 30px;
+}
+
+.bootstrap-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.bootstrap-icon {
+  flex: 0 0 auto;
+  margin-top: 4px;
   color: #38bdf8;
-  background-color: #0f172a;
+  font-size: 26px;
+}
+
+.bootstrap-copy h2 {
+  margin: 0 0 8px 0;
+  color: var(--text-primary);
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.bootstrap-copy p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.bootstrap-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.bootstrap-card {
+  padding: 24px;
+}
+
+@media (max-width: 768px) {
+  .app-bootstrap {
+    padding: 20px 14px;
+  }
+
+  .bootstrap-header {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 20px;
+  }
+
+  .bootstrap-brand-title {
+    font-size: 17px;
+  }
+
+  .bootstrap-panel,
+  .bootstrap-card {
+    padding: 20px;
+  }
+
+  .bootstrap-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* 用户下拉菜单精致样式 */
