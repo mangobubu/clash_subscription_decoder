@@ -2,7 +2,6 @@
 
 package main
 
-
 import (
 	"crypto/tls"
 	"embed"
@@ -21,14 +20,13 @@ import (
 	"time"
 	"unicode"
 
-	"golang.org/x/crypto/bcrypt"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/mojocn/base64Captcha"
-	"gorm.io/gorm"
+	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
+	"gorm.io/gorm"
 )
-
 
 //go:embed dist
 var frontendFS embed.FS
@@ -65,7 +63,7 @@ func main() {
 	// 需要认证的接口组
 	api := r.Group("/api")
 	api.Use(AuthMiddleware())
-	
+
 	// 注册验证接口
 	api.GET("/verify", handleVerify)
 	api.POST("/logout", handleLogout)
@@ -79,10 +77,10 @@ func main() {
 
 	// 注册解码接口
 	api.POST("/decode", handleDecode)
-	
+
 	// 注册获取最新订阅接口
 	api.GET("/subscription", handleGetSubscription)
-	
+
 	// 注册解析节点链接接口
 	api.POST("/parse-link", handleParseLink)
 
@@ -290,7 +288,7 @@ func handleCaptcha(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"enabled": false}})
 		return
 	}
-	
+
 	driver := &base64Captcha.DriverMath{
 		Height:          AppConfig.Auth.CaptchaHeight,
 		Width:           AppConfig.Auth.CaptchaWidth,
@@ -519,7 +517,7 @@ func handleDecode(c *gin.Context) {
 	}
 
 	targetURL := strings.TrimSpace(req.URL)
-	
+
 	// 极致清洗 URL，只保留可见的合法 ASCII 字符，彻底消灭零宽空格 \u200b 等隐形杀手！
 	var cleanURL strings.Builder
 	for _, r := range targetURL {
@@ -584,7 +582,7 @@ func handleDecode(c *gin.Context) {
 		}
 	}
 	decodedContent = strings.Join(lines, "\n")
-	
+
 	// 🌟 AST 无损注入逻辑：自动将数据库中的自定义节点注入到 proxies 中
 	decodedContent = injectCustomNodes(decodedContent)
 
@@ -853,7 +851,7 @@ func handleCreateCustomRule(c *gin.Context) {
 			return
 		}
 		ReapplyRulesToLatestSubscription()
-	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "规则已覆盖更新", "data": existingRule})
+		c.JSON(http.StatusOK, gin.H{"code": 200, "message": "规则已覆盖更新", "data": existingRule})
 		return
 	}
 
@@ -973,7 +971,7 @@ func injectCustomNodes(yamlContent string) string {
 			log.Printf("Failed to unmarshal temp config back to node: %v", err)
 			continue
 		}
-		
+
 		if len(tempRoot.Content) > 0 && len(tempRoot.Content[0].Content) > 0 {
 			// 将生成的节点对象注入到 proxiesNode 的最开头，使其显示在最前面
 			proxiesNode.Content = append([]*yaml.Node{tempRoot.Content[0]}, proxiesNode.Content...)
@@ -1176,7 +1174,7 @@ func injectCustomRules(yamlContent string) string {
 			ruleStr = fmt.Sprintf("%s,%s,%s", cr.Type, cr.Payload, cr.Target)
 			fingerprint = fmt.Sprintf("%s,%s", cr.Type, cr.Payload)
 		}
-		
+
 		customFingerprints[fingerprint] = true
 		customRuleNodes = append(customRuleNodes, &yaml.Node{
 			Kind:  yaml.ScalarNode,
@@ -1290,7 +1288,7 @@ rules:
 	}
 
 	browserUA := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-	
+
 	strategies := []Strategy{
 		// 策略 0: 标准 Clash 原生请求头（优先级最高！因为这会诱导订阅转换面板直接吐出完整的 YAML 配置文件，而不是 Base64 节点列表）
 		{Name: "Clash原生", UA: "clash", UseBareHost: false, Minimal: true},
@@ -1363,7 +1361,7 @@ rules:
 		log.Printf("==========================================================================")
 
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("[策略: %s] 服务器返回状态码 %d (内容: %s)", 
+			lastErr = fmt.Errorf("[策略: %s] 服务器返回状态码 %d (内容: %s)",
 				strategy.Name, resp.StatusCode, truncateString(string(bodyBytes), 80))
 			continue
 		}
@@ -1525,7 +1523,7 @@ func ProcessSubscriptionRawData(rawResponse string) (string, error) {
 		}
 	}
 	decodedContent = strings.Join(lines, "\n")
-	
+
 	decodedContent = injectCustomNodes(decodedContent)
 	decodedContent = injectCustomGroups(decodedContent)
 	decodedContent = injectCustomRules(decodedContent)
@@ -1601,6 +1599,15 @@ func handleGenerateSubToken(c *gin.Context) {
 
 // handleFinalSubscription 最终订阅地址接口
 func handleFinalSubscription(c *gin.Context) {
+	format := strings.ToLower(strings.TrimSpace(c.DefaultQuery("format", "clash")))
+	if format == "" {
+		format = "clash"
+	}
+	if format != "clash" && format != "shadowrocket" {
+		c.String(http.StatusBadRequest, "Unsupported subscription format: "+format)
+		return
+	}
+
 	token := c.Query("token")
 	if token == "" {
 		c.String(http.StatusUnauthorized, "Missing token")
@@ -1630,49 +1637,44 @@ func handleFinalSubscription(c *gin.Context) {
 	if err != nil {
 		// 容错降级返回缓存
 		if sub.Decoded != "" {
-			c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(sub.Decoded))
+			serveFinalSubscription(c, format, sub.Decoded)
 			return
 		}
 		c.String(http.StatusBadGateway, "Failed to fetch original subscription: "+err.Error())
 		return
 	}
 
-	// 2. 解码并清洗
-	var decodedContent string
-	decoded, err := decodeAdaptiveBase64(rawResponse)
+	// 2. 解码、清洗并注入自定义配置
+	decodedContent, err := ProcessSubscriptionRawData(rawResponse)
 	if err != nil {
-		if strings.Contains(rawResponse, "proxies:") || strings.Contains(rawResponse, "outbounds:") || strings.Contains(rawResponse, "servers:") {
-			decodedContent = rawResponse
-		} else {
-			if sub.Decoded != "" {
-				c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(sub.Decoded))
-				return
-			}
-			c.String(http.StatusUnprocessableEntity, "Unsupported format")
+		if sub.Decoded != "" {
+			serveFinalSubscription(c, format, sub.Decoded)
 			return
 		}
-	} else {
-		decodedContent = decoded
+		c.String(http.StatusUnprocessableEntity, "Unsupported format: "+err.Error())
+		return
 	}
 
-	lines := strings.Split(decodedContent, "\n")
-	for i, line := range lines {
-		if unescaped, err := url.PathUnescape(strings.TrimSpace(line)); err == nil {
-			lines[i] = unescaped
-		}
-	}
-	decodedContent = strings.Join(lines, "\n")
-
-	// 3. AST 注入
-	decodedContent = injectCustomNodes(decodedContent)
-	decodedContent = injectCustomGroups(decodedContent)
-	decodedContent = injectCustomRules(decodedContent)
-
-	// 4. 更新缓存
+	// 3. 更新缓存
 	sub.RawResponse = rawResponse
 	sub.Decoded = decodedContent
 	DB.Save(&sub)
 
-	// 5. 返回纯 YAML
-	c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(decodedContent))
+	// 4. 按客户端格式返回订阅内容
+	serveFinalSubscription(c, format, decodedContent)
+}
+
+func serveFinalSubscription(c *gin.Context, format string, clashYAML string) {
+	if format == "shadowrocket" {
+		shadowrocketConfig, err := ConvertClashYAMLToShadowrocket(clashYAML)
+		if err != nil {
+			c.String(http.StatusUnprocessableEntity, "Failed to generate Shadowrocket config: "+err.Error())
+			return
+		}
+		c.Header("Content-Disposition", "attachment; filename=\"shadowrocket.conf\"")
+		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(shadowrocketConfig))
+		return
+	}
+
+	c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(clashYAML))
 }
