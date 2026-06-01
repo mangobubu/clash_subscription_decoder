@@ -54,18 +54,33 @@ const result = ref<{ url: string; raw_response: string; decoded: string } | null
 const isCopyingSubLink = ref(false);
 const isGeneratingSubLink = ref(false);
 const subLinkDialogVisible = ref(false);
+const subLinkDialogTitle = ref("复制订阅地址");
+const showRegeneratedWarning = ref(false);
 const finalSubLink = ref("");
+const shadowrocketSubLink = ref("");
 
 const buildSubLink = (token: string) => buildPublicBackendUrl(`/sub?token=${encodeURIComponent(token)}`);
+const buildShadowrocketSubLink = (token: string) =>
+  buildPublicBackendUrl(`/sub?token=${encodeURIComponent(token)}&format=shadowrocket`);
 
-const copySubLink = async () => {
+const setFinalSubLinks = (token: string) => {
+  finalSubLink.value = buildSubLink(token);
+  shadowrocketSubLink.value = buildShadowrocketSubLink(token);
+};
+
+const copyTextToClipboard = async (text: string, successMessage = "链接已复制到剪贴板！") => {
   try {
-    await navigator.clipboard.writeText(finalSubLink.value);
-    ElMessage.success("链接已复制到剪贴板！");
+    await navigator.clipboard.writeText(text);
+    ElMessage.success(successMessage);
   } catch (err) {
     ElMessage.error("复制失败，请手动复制");
   }
 };
+
+const copySubLink = () => copyTextToClipboard(finalSubLink.value);
+
+const copyShadowrocketSubLink = () =>
+  copyTextToClipboard(shadowrocketSubLink.value, "Shadowrocket 配置地址已复制到剪贴板！");
 
 const copyCurrentSubLink = async () => {
   isCopyingSubLink.value = true;
@@ -82,8 +97,10 @@ const copyCurrentSubLink = async () => {
       return;
     }
 
-    finalSubLink.value = buildSubLink(data.token);
-    await copySubLink();
+    setFinalSubLinks(data.token);
+    subLinkDialogTitle.value = "复制订阅地址";
+    showRegeneratedWarning.value = false;
+    subLinkDialogVisible.value = true;
   } catch (err: any) {
     console.error(err);
     ElMessage.error(err.response?.data?.message || "获取订阅地址失败，请检查网络或登录状态");
@@ -112,7 +129,9 @@ const regenerateSubLink = async () => {
   try {
     const res = await axios.post("http://localhost:8080/api/generate-sub-token");
     if (res.data.code === 200) {
-      finalSubLink.value = buildSubLink(res.data.data.token);
+      setFinalSubLinks(res.data.data.token);
+      subLinkDialogTitle.value = "订阅地址已重新生成";
+      showRegeneratedWarning.value = true;
       subLinkDialogVisible.value = true;
     } else {
       ElMessage.error(res.data.message || "重新生成失败");
@@ -2073,25 +2092,48 @@ const submitChangePassword = async () => {
     <!-- 最终订阅链接弹窗 -->
     <el-dialog
       v-model="subLinkDialogVisible"
-      title="订阅地址已重新生成"
-      width="500px"
+      :title="subLinkDialogTitle"
+      width="640px"
       class="glass-dialog"
     >
       <div style="padding: 10px 0;">
         <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 14px; line-height: 1.5;">
-          以下是当前最新的专属订阅地址，请复制后导入您的客户端（如 Clash, Mihomo 等）。
-          <br/><br/>
-          <strong style="color: var(--el-color-danger);">重新生成订阅会覆盖旧 token，旧订阅地址将立即失效。</strong>
-        </p>
-        <el-input
-          v-model="finalSubLink"
-          readonly
-          class="copy-input"
-        >
-          <template #append>
-            <el-button icon="CopyDocument" @click="copySubLink" type="primary">复制</el-button>
+          请选择要复制的客户端配置地址。Clash/Mihomo 使用默认 YAML 订阅；Shadowrocket 请复制专用配置地址，并在 iOS 的“配置”里通过 URL 添加，不要作为首页普通服务器订阅导入。
+          <template v-if="showRegeneratedWarning">
+            <br/><br/>
+            <strong style="color: var(--el-color-danger);">重新生成订阅会覆盖旧 token，旧订阅地址将立即失效。</strong>
           </template>
-        </el-input>
+        </p>
+        <div style="display: grid; gap: 14px;">
+          <div>
+            <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">
+              Clash / Mihomo 订阅地址
+            </div>
+            <el-input
+              v-model="finalSubLink"
+              readonly
+              class="copy-input"
+            >
+              <template #append>
+                <el-button icon="CopyDocument" @click="copySubLink" type="primary">复制</el-button>
+              </template>
+            </el-input>
+          </div>
+          <div>
+            <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">
+              Shadowrocket 配置地址
+            </div>
+            <el-input
+              v-model="shadowrocketSubLink"
+              readonly
+              class="copy-input"
+            >
+              <template #append>
+                <el-button icon="CopyDocument" @click="copyShadowrocketSubLink" type="success">复制</el-button>
+              </template>
+            </el-input>
+          </div>
+        </div>
       </div>
       <template #footer>
         <el-button @click="subLinkDialogVisible = false" type="primary" plain>我知道了</el-button>
