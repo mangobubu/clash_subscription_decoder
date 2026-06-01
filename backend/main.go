@@ -70,6 +70,7 @@ func main() {
 	api.GET("/verify", handleVerify)
 	api.POST("/logout", handleLogout)
 	api.POST("/change-password", handleChangePassword)
+	api.GET("/sub-token", handleGetSubToken)
 	api.POST("/generate-sub-token", handleGenerateSubToken)
 
 	// 数据备份与导入恢复
@@ -1545,6 +1546,31 @@ func ReapplyRulesToLatestSubscription() {
 		sub.Decoded = decodedContent
 		DB.Save(&sub)
 	}
+}
+
+// handleGetSubToken 获取当前有效的订阅 Token，不创建新 Token
+func handleGetSubToken(c *gin.Context) {
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
+		return
+	}
+
+	var user User
+	if err := DB.Where("username = ?", username).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "用户不存在"})
+		return
+	}
+
+	hasToken := user.SubToken != ""
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "获取成功",
+		"data": gin.H{
+			"token":     user.SubToken,
+			"has_token": hasToken,
+		},
+	})
 }
 
 // handleGenerateSubToken 生成新的订阅 Token 并作废旧 Token
