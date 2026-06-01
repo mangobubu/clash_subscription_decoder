@@ -5,15 +5,14 @@ import 'element-plus/dist/index.css'
 import 'element-plus/theme-chalk/dark/css-vars.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
+import { normalizeBackendUrl } from './config/backend'
 
 const app = createApp(App)
 
 import axios from 'axios'
 
 axios.interceptors.request.use(config => {
-  if (config.url && config.url.startsWith('http://localhost:8080')) {
-    config.url = config.url.replace('http://localhost:8080', '')
-  }
+  config.url = normalizeBackendUrl(config.url)
   const token = localStorage.getItem('token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`

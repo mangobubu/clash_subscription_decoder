@@ -10,6 +10,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import jsYaml from "js-yaml";
 import Login from "./Login.vue";
+import { buildPublicBackendUrl } from "./config/backend";
 
 const isLoggedIn = ref(false);
 const isVerifying = ref(true);
@@ -39,30 +40,12 @@ const result = ref<{ url: string; raw_response: string; decoded: string } | null
 );
 
 // 最终订阅生成状态
+const isCopyingSubLink = ref(false);
 const isGeneratingSubLink = ref(false);
 const subLinkDialogVisible = ref(false);
 const finalSubLink = ref("");
 
-const generateSubLink = async () => {
-  isGeneratingSubLink.value = true;
-  try {
-    const res = await axios.post("http://localhost:8080/api/generate-sub-token");
-    if (res.data.code === 200) {
-      const token = res.data.data.token;
-      // 动态提取当前浏览器访问的主机协议与域名进行拼装，实现 100% 动态自适应
-      const origin = window.location.origin;
-      finalSubLink.value = `${origin}/sub?token=${token}`;
-      subLinkDialogVisible.value = true;
-    } else {
-      ElMessage.error(res.data.message || "生成失败");
-    }
-  } catch (err: any) {
-    console.error(err);
-    ElMessage.error(err.response?.data?.message || "生成失败，请检查网络或登录状态");
-  } finally {
-    isGeneratingSubLink.value = false;
-  }
-};
+const buildSubLink = (token: string) => buildPublicBackendUrl(`/sub?token=${encodeURIComponent(token)}`);
 
 const copySubLink = async () => {
   try {
@@ -70,6 +53,64 @@ const copySubLink = async () => {
     ElMessage.success("链接已复制到剪贴板！");
   } catch (err) {
     ElMessage.error("复制失败，请手动复制");
+  }
+};
+
+const copyCurrentSubLink = async () => {
+  isCopyingSubLink.value = true;
+  try {
+    const res = await axios.get("http://localhost:8080/api/sub-token");
+    if (res.data.code !== 200) {
+      ElMessage.error(res.data.message || "获取订阅地址失败");
+      return;
+    }
+
+    const data = res.data.data || {};
+    if (!data.has_token || !data.token) {
+      ElMessage.warning("当前还没有订阅地址，请先重新生成订阅");
+      return;
+    }
+
+    finalSubLink.value = buildSubLink(data.token);
+    await copySubLink();
+  } catch (err: any) {
+    console.error(err);
+    ElMessage.error(err.response?.data?.message || "获取订阅地址失败，请检查网络或登录状态");
+  } finally {
+    isCopyingSubLink.value = false;
+  }
+};
+
+const regenerateSubLink = async () => {
+  try {
+    await ElMessageBox.confirm(
+      "重新生成订阅会覆盖旧 token，旧订阅地址将立即失效。是否继续？",
+      "重新生成订阅确认",
+      {
+        confirmButtonText: "确认重新生成",
+        cancelButtonText: "取消",
+        type: "warning",
+        customClass: "glass-dialog",
+      },
+    );
+  } catch {
+    return;
+  }
+
+  isGeneratingSubLink.value = true;
+  try {
+    const res = await axios.post("http://localhost:8080/api/generate-sub-token");
+    if (res.data.code === 200) {
+      finalSubLink.value = buildSubLink(res.data.data.token);
+      subLinkDialogVisible.value = true;
+    } else {
+      ElMessage.error(res.data.message || "重新生成失败");
+    }
+  } catch (err: any) {
+    console.error(err);
+    ElMessage.error(err.response?.data?.message || "重新生成失败，请检查网络或登录状态");
+  } finally {
+    isGeneratingSubLink.value = false;
   }
 };
 
@@ -1214,31 +1255,40 @@ const submitChangePassword = async () => {
             </div>
 
             <div class="result-actions">
-              <el-button-group>
+              <el-button-group class="result-action-group">
                 <el-button
-                  type="success"
                   size="default"
                   icon="CopyDocument"
+                  class="result-action-button result-action-button--copy"
                   @click="handleCopy"
                 >
                   复制明文
                 </el-button>
                 <el-button
-                  type="primary"
                   size="default"
                   icon="Download"
+                  class="result-action-button result-action-button--export"
                   @click="handleDownload"
                 >
                   导出 YAML
                 </el-button>
                 <el-button
-                  type="warning"
                   size="default"
                   icon="Link"
-                  @click="generateSubLink"
+                  class="result-action-button result-action-button--link"
+                  @click="copyCurrentSubLink"
+                  :loading="isCopyingSubLink"
+                >
+                  复制订阅地址
+                </el-button>
+                <el-button
+                  size="default"
+                  icon="Refresh"
+                  class="result-action-button result-action-button--danger"
+                  @click="regenerateSubLink"
                   :loading="isGeneratingSubLink"
                 >
-                  生成最终订阅
+                  重新生成订阅
                 </el-button>
               </el-button-group>
             </div>
@@ -1970,15 +2020,15 @@ const submitChangePassword = async () => {
     <!-- 最终订阅链接弹窗 -->
     <el-dialog
       v-model="subLinkDialogVisible"
-      title="🎉 最终订阅链接生成成功"
+      title="订阅地址已重新生成"
       width="500px"
       class="glass-dialog"
     >
       <div style="padding: 10px 0;">
         <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 14px; line-height: 1.5;">
-          请复制以下专属订阅链接并导入您的客户端（如 Clash, Mihomo 等）。
+          以下是当前最新的专属订阅地址，请复制后导入您的客户端（如 Clash, Mihomo 等）。
           <br/><br/>
-          <strong style="color: var(--el-color-danger);">⚠️ 每次生成新链接后，旧的订阅链接将立即作废！</strong>
+          <strong style="color: var(--el-color-danger);">重新生成订阅会覆盖旧 token，旧订阅地址将立即失效。</strong>
         </p>
         <el-input
           v-model="finalSubLink"
@@ -2239,6 +2289,96 @@ const submitChangePassword = async () => {
 
 .meta-label {
   color: var(--text-secondary);
+}
+
+.result-actions {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 100%;
+}
+
+.result-action-group {
+  display: inline-flex;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 10px 24px rgba(0, 0, 0, 0.18);
+}
+
+.result-action-group :deep(.el-button) {
+  height: 38px;
+  margin-left: 0 !important;
+  padding: 0 14px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.result-action-group :deep(.el-button + .el-button) {
+  border-left: 1px solid rgba(148, 163, 184, 0.14) !important;
+}
+
+.result-action-group :deep(.el-button:hover),
+.result-action-group :deep(.el-button:focus) {
+  background: rgba(56, 189, 248, 0.12) !important;
+  color: #e0f2fe !important;
+}
+
+.result-action-group :deep(.result-action-button--link:hover),
+.result-action-group :deep(.result-action-button--link:focus) {
+  background: rgba(250, 204, 21, 0.12) !important;
+  color: #fef3c7 !important;
+}
+
+.result-action-group :deep(.result-action-button--danger) {
+  color: #fca5a5 !important;
+}
+
+.result-action-group :deep(.result-action-button--danger:hover),
+.result-action-group :deep(.result-action-button--danger:focus) {
+  background: rgba(248, 113, 113, 0.12) !important;
+  color: #fecaca !important;
+}
+
+@media (max-width: 768px) {
+  .result-actions {
+    width: 100%;
+  }
+
+  .result-action-group {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .result-action-group :deep(.el-button) {
+    width: 100%;
+    padding: 0 10px !important;
+    justify-content: center;
+  }
+
+  .result-action-group :deep(.el-button + .el-button) {
+    border-left: 0 !important;
+  }
+
+  .result-action-group :deep(.el-button:nth-child(2n)) {
+    border-left: 1px solid rgba(148, 163, 184, 0.14) !important;
+  }
+
+  .result-action-group :deep(.el-button:nth-child(n + 3)) {
+    border-top: 1px solid rgba(148, 163, 184, 0.14) !important;
+  }
 }
 
 .custom-tabs :deep(.el-tabs__item) {
