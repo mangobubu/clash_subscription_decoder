@@ -61,7 +61,8 @@ func main() {
 	r.POST("/api/login", handleLogin)
 	r.GET("/sub", handleFinalSubscription)                      // 最终订阅地址
 	r.GET("/shadowrocket.conf", handleShadowrocketSubscription) // Shadowrocket 配置文件地址
-	r.GET("/shadowrocket/install", handleShadowrocketInstall)   // Shadowrocket 一键安装桥接页
+	r.GET("/shadowrocket/config/:tokenFile", handleShadowrocketPathSubscription)
+	r.GET("/shadowrocket/install", handleShadowrocketInstall) // Shadowrocket 一键安装桥接页
 
 	// 需要认证的接口组
 	api := r.Group("/api")
@@ -1619,6 +1620,15 @@ func handleShadowrocketSubscription(c *gin.Context) {
 	serveSubscriptionByFormat(c, "shadowrocket")
 }
 
+func handleShadowrocketPathSubscription(c *gin.Context) {
+	token, err := parseShadowrocketConfigToken(c.Param("tokenFile"))
+	if err != nil {
+		c.String(http.StatusBadRequest, err.Error())
+		return
+	}
+	serveSubscriptionByToken(c, "shadowrocket", token)
+}
+
 func handleShadowrocketInstall(c *gin.Context) {
 	token := c.Query("token")
 	if token == "" {
@@ -1632,9 +1642,25 @@ func handleShadowrocketInstall(c *gin.Context) {
 		return
 	}
 
-	configURL := buildAbsoluteRequestURL(c, "/shadowrocket.conf?token="+url.QueryEscape(token))
-	installURL := "shadowrocket://config/add/" + url.QueryEscape(configURL)
+	configURL := buildAbsoluteRequestURL(c, "/shadowrocket/config/"+url.PathEscape(token)+".conf")
+	installURL := "shadowrocket://config/add/" + configURL
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(buildShadowrocketInstallHTML(installURL)))
+}
+
+func parseShadowrocketConfigToken(tokenFile string) (string, error) {
+	if !strings.HasSuffix(strings.ToLower(tokenFile), ".conf") {
+		return "", fmt.Errorf("invalid Shadowrocket config filename")
+	}
+
+	escapedToken := strings.TrimSuffix(tokenFile, ".conf")
+	token, err := url.PathUnescape(escapedToken)
+	if err != nil {
+		return "", fmt.Errorf("invalid Shadowrocket config token")
+	}
+	if strings.TrimSpace(token) == "" {
+		return "", fmt.Errorf("missing Shadowrocket config token")
+	}
+	return token, nil
 }
 
 func buildShadowrocketInstallHTML(installURL string) string {
@@ -1682,7 +1708,10 @@ func serveSubscriptionByFormat(c *gin.Context, format string) {
 		c.String(http.StatusUnauthorized, "Missing token")
 		return
 	}
+	serveSubscriptionByToken(c, format, token)
+}
 
+func serveSubscriptionByToken(c *gin.Context, format string, token string) {
 	var user User
 	if err := DB.Where("sub_token = ?", token).First(&user).Error; err != nil {
 		c.String(http.StatusUnauthorized, "Invalid or expired token")

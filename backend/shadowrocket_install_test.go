@@ -19,16 +19,26 @@ func TestBuildAbsoluteRequestURLUsesForwardedHeaders(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = req
 
-	got := buildAbsoluteRequestURL(ctx, "/shadowrocket.conf?token=test-token")
-	want := "https://proxy.example.com/shadowrocket.conf?token=test-token"
+	got := buildAbsoluteRequestURL(ctx, "/shadowrocket/config/test-token.conf")
+	want := "https://proxy.example.com/shadowrocket/config/test-token.conf"
 	if got != want {
 		t.Fatalf("buildAbsoluteRequestURL() = %q, want %q", got, want)
 	}
 }
 
+func TestParseShadowrocketConfigToken(t *testing.T) {
+	got, err := parseShadowrocketConfigToken("test-token%3D.conf")
+	if err != nil {
+		t.Fatalf("parseShadowrocketConfigToken returned error: %v", err)
+	}
+	if got != "test-token=" {
+		t.Fatalf("parseShadowrocketConfigToken() = %q, want %q", got, "test-token=")
+	}
+}
+
 func TestShadowrocketInstallPageContainsConfigScheme(t *testing.T) {
-	configURL := "https://proxy.example.com/shadowrocket.conf?token=test-token"
-	installURL := "shadowrocket://config/add/https%3A%2F%2Fproxy.example.com%2Fshadowrocket.conf%3Ftoken%3Dtest-token"
+	configURL := "https://proxy.example.com/shadowrocket/config/test-token.conf"
+	installURL := "shadowrocket://config/add/" + configURL
 	page := buildShadowrocketInstallHTML(installURL)
 
 	if !strings.Contains(page, "安装到 Shadowrocket") {
@@ -37,7 +47,7 @@ func TestShadowrocketInstallPageContainsConfigScheme(t *testing.T) {
 	if !strings.Contains(page, installURL) {
 		t.Fatalf("install page should contain scheme URL %q, got:\n%s", installURL, page)
 	}
-	if strings.Contains(page, configURL) {
-		t.Fatalf("raw config URL should stay encoded inside scheme URL, got:\n%s", page)
+	if !strings.Contains(page, configURL) {
+		t.Fatalf("install page should keep the raw config URL visible to Shadowrocket, got:\n%s", page)
 	}
 }
