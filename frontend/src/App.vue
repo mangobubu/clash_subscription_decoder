@@ -58,14 +58,18 @@ const subLinkDialogTitle = ref("复制订阅地址");
 const showRegeneratedWarning = ref(false);
 const finalSubLink = ref("");
 const shadowrocketSubLink = ref("");
+const shadowrocketInstallLink = ref("");
 
 const buildSubLink = (token: string) => buildPublicBackendUrl(`/sub?token=${encodeURIComponent(token)}`);
 const buildShadowrocketSubLink = (token: string) =>
-  buildPublicBackendUrl(`/sub?token=${encodeURIComponent(token)}&format=shadowrocket`);
+  buildPublicBackendUrl(`/shadowrocket.conf?token=${encodeURIComponent(token)}`);
+const buildShadowrocketInstallLink = (token: string) =>
+  buildPublicBackendUrl(`/shadowrocket/install?token=${encodeURIComponent(token)}`);
 
 const setFinalSubLinks = (token: string) => {
   finalSubLink.value = buildSubLink(token);
   shadowrocketSubLink.value = buildShadowrocketSubLink(token);
+  shadowrocketInstallLink.value = buildShadowrocketInstallLink(token);
 };
 
 const copyTextToClipboard = async (text: string, successMessage = "链接已复制到剪贴板！") => {
@@ -81,6 +85,17 @@ const copySubLink = () => copyTextToClipboard(finalSubLink.value);
 
 const copyShadowrocketSubLink = () =>
   copyTextToClipboard(shadowrocketSubLink.value, "Shadowrocket 配置地址已复制到剪贴板！");
+
+const copyShadowrocketInstallLink = () =>
+  copyTextToClipboard(shadowrocketInstallLink.value, "Shadowrocket 安装链接已复制到剪贴板！");
+
+const installShadowrocketConfig = () => {
+  if (!shadowrocketInstallLink.value) {
+    ElMessage.warning("请先生成或获取订阅地址");
+    return;
+  }
+  window.location.href = shadowrocketInstallLink.value;
+};
 
 const copyCurrentSubLink = async () => {
   isCopyingSubLink.value = true;
@@ -2098,7 +2113,7 @@ const submitChangePassword = async () => {
     >
       <div style="padding: 10px 0;">
         <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 14px; line-height: 1.5;">
-          请选择要复制的客户端配置地址。Clash/Mihomo 使用默认 YAML 订阅；Shadowrocket 请复制专用配置地址，并在 iOS 的“配置”里通过 URL 添加，不要作为首页普通服务器订阅导入。
+          请选择要使用的客户端配置地址。Clash/Mihomo 使用默认 YAML 订阅；Shadowrocket 请优先点击“安装到 Shadowrocket”创建新配置，失败时再复制配置地址到 iOS 的“配置”里通过 URL 下载，不要作为首页普通服务器订阅导入。
           <template v-if="showRegeneratedWarning">
             <br/><br/>
             <strong style="color: var(--el-color-danger);">重新生成订阅会覆盖旧 token，旧订阅地址将立即失效。</strong>
@@ -2123,6 +2138,24 @@ const submitChangePassword = async () => {
             <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">
               Shadowrocket 配置地址
             </div>
+            <el-button
+              type="success"
+              icon="Link"
+              style="width: 100%; margin-bottom: 10px;"
+              @click="installShadowrocketConfig"
+            >
+              安装到 Shadowrocket
+            </el-button>
+            <el-input
+              v-model="shadowrocketInstallLink"
+              readonly
+              class="copy-input"
+              style="margin-bottom: 10px;"
+            >
+              <template #append>
+                <el-button icon="CopyDocument" @click="copyShadowrocketInstallLink" type="success">复制安装链接</el-button>
+              </template>
+            </el-input>
             <el-input
               v-model="shadowrocketSubLink"
               readonly

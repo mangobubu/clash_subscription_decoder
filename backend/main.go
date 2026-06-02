@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"image/color"
 	"io"
 	"io/fs"
@@ -58,7 +59,9 @@ func main() {
 	r.POST("/api/init", handleInit)
 	r.GET("/api/captcha", handleCaptcha)
 	r.POST("/api/login", handleLogin)
-	r.GET("/sub", handleFinalSubscription) // 最终订阅地址
+	r.GET("/sub", handleFinalSubscription)                      // 最终订阅地址
+	r.GET("/shadowrocket.conf", handleShadowrocketSubscription) // Shadowrocket 配置文件地址
+	r.GET("/shadowrocket/install", handleShadowrocketInstall)   // Shadowrocket 一键安装桥接页
 
 	// 需要认证的接口组
 	api := r.Group("/api")
@@ -1608,6 +1611,72 @@ func handleFinalSubscription(c *gin.Context) {
 		return
 	}
 
+	serveSubscriptionByFormat(c, format)
+}
+
+// handleShadowrocketSubscription 使用明确的 .conf 路径输出 Shadowrocket 配置文件。
+func handleShadowrocketSubscription(c *gin.Context) {
+	serveSubscriptionByFormat(c, "shadowrocket")
+}
+
+func handleShadowrocketInstall(c *gin.Context) {
+	token := c.Query("token")
+	if token == "" {
+		c.String(http.StatusUnauthorized, "Missing token")
+		return
+	}
+
+	var user User
+	if err := DB.Where("sub_token = ?", token).First(&user).Error; err != nil {
+		c.String(http.StatusUnauthorized, "Invalid or expired token")
+		return
+	}
+
+	configURL := buildAbsoluteRequestURL(c, "/shadowrocket.conf?token="+url.QueryEscape(token))
+	installURL := "shadowrocket://config/add/" + url.QueryEscape(configURL)
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(buildShadowrocketInstallHTML(installURL)))
+}
+
+func buildShadowrocketInstallHTML(installURL string) string {
+	return fmt.Sprintf(`<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>安装到 Shadowrocket</title>
+  <meta http-equiv="refresh" content="0;url=%s">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 24px; line-height: 1.6; color: #111827; }
+    a { color: #16a34a; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <p>正在打开 Shadowrocket 安装配置...</p>
+  <p>如果没有自动跳转，请点击：<a href="%s">安装到 Shadowrocket</a></p>
+  <script>window.location.replace(%q);</script>
+</body>
+</html>`, html.EscapeString(installURL), html.EscapeString(installURL), installURL)
+}
+
+func buildAbsoluteRequestURL(c *gin.Context, path string) string {
+	scheme := c.GetHeader("X-Forwarded-Proto")
+	if scheme == "" {
+		if c.Request.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+
+	host := c.GetHeader("X-Forwarded-Host")
+	if host == "" {
+		host = c.Request.Host
+	}
+
+	return scheme + "://" + host + path
+}
+
+func serveSubscriptionByFormat(c *gin.Context, format string) {
 	token := c.Query("token")
 	if token == "" {
 		c.String(http.StatusUnauthorized, "Missing token")
