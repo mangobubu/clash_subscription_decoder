@@ -10,7 +10,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import jsYaml from "js-yaml";
 import Login from "./Login.vue";
-import { buildPublicBackendUrl } from "./config/backend";
+import { buildBackendUrl, buildPublicBackendUrl } from "./config/backend";
 
 const isLoggedIn = ref(false);
 const isVerifying = ref(true);
@@ -57,10 +57,13 @@ const subLinkDialogVisible = ref(false);
 const subLinkDialogTitle = ref("复制订阅地址");
 const showRegeneratedWarning = ref(false);
 const finalSubLink = ref("");
+const surgeSubLink = ref("");
 const shadowrocketSubLink = ref("");
 const shadowrocketInstallLink = ref("");
 
 const buildSubLink = (token: string) => buildPublicBackendUrl(`/sub?token=${encodeURIComponent(token)}`);
+const buildSurgeSubLink = (token: string) =>
+  buildPublicBackendUrl(`/surge.conf?token=${encodeURIComponent(token)}`);
 const buildShadowrocketSubLink = (token: string) =>
   buildPublicBackendUrl(`/shadowrocket.conf?token=${encodeURIComponent(token)}`);
 const buildShadowrocketInstallLink = (token: string) =>
@@ -68,6 +71,7 @@ const buildShadowrocketInstallLink = (token: string) =>
 
 const setFinalSubLinks = (token: string) => {
   finalSubLink.value = buildSubLink(token);
+  surgeSubLink.value = buildSurgeSubLink(token);
   shadowrocketSubLink.value = buildShadowrocketSubLink(token);
   shadowrocketInstallLink.value = buildShadowrocketInstallLink(token);
 };
@@ -82,6 +86,9 @@ const copyTextToClipboard = async (text: string, successMessage = "链接已复�
 };
 
 const copySubLink = () => copyTextToClipboard(finalSubLink.value);
+
+const copySurgeSubLink = () =>
+  copyTextToClipboard(surgeSubLink.value, "Surge 5 配置地址已复制到剪贴板！");
 
 const copyShadowrocketSubLink = () =>
   copyTextToClipboard(shadowrocketSubLink.value, "Shadowrocket 配置地址已复制到剪贴板！");
@@ -100,7 +107,7 @@ const installShadowrocketConfig = () => {
 const copyCurrentSubLink = async () => {
   isCopyingSubLink.value = true;
   try {
-    const res = await axios.get("http://localhost:8080/api/sub-token");
+    const res = await axios.get(buildBackendUrl("/api/sub-token"));
     if (res.data.code !== 200) {
       ElMessage.error(res.data.message || "获取订阅地址失败");
       return;
@@ -142,7 +149,7 @@ const regenerateSubLink = async () => {
 
   isGeneratingSubLink.value = true;
   try {
-    const res = await axios.post("http://localhost:8080/api/generate-sub-token");
+    const res = await axios.post(buildBackendUrl("/api/generate-sub-token"));
     if (res.data.code === 200) {
       setFinalSubLinks(res.data.data.token);
       subLinkDialogTitle.value = "订阅地址已重新生成";
@@ -161,7 +168,7 @@ const regenerateSubLink = async () => {
 
 const loadSubscription = async () => {
   try {
-    const res = await axios.get("http://localhost:8080/api/subscription");
+    const res = await axios.get(buildBackendUrl("/api/subscription"));
     if (res.data.code === 200 && res.data.data) {
       inputUrl.value = res.data.data.url;
       result.value = res.data.data;
@@ -185,9 +192,9 @@ const customRulesDict = ref<Record<string, any>>({});
 const fetchCustomData = async () => {
   try {
     const [nodesRes, groupsRes, rulesRes] = await Promise.all([
-      axios.get("http://localhost:8080/api/custom-nodes"),
-      axios.get("http://localhost:8080/api/custom-groups"),
-      axios.get("http://localhost:8080/api/custom-rules"),
+      axios.get(buildBackendUrl("/api/custom-nodes")),
+      axios.get(buildBackendUrl("/api/custom-groups")),
+      axios.get(buildBackendUrl("/api/custom-rules")),
     ]);
     const nDict: Record<string, any> = {};
     if (nodesRes.data.code === 200) {
@@ -238,7 +245,7 @@ onMounted(async () => {
   const token = localStorage.getItem('token');
   if (token) {
     try {
-      await axios.get('http://localhost:8080/api/verify');
+      await axios.get(buildBackendUrl("/api/verify"));
       isLoggedIn.value = true;
       isVerifying.value = false;
       await loadInitialAppData();
@@ -284,7 +291,7 @@ const handleDecode = async () => {
   result.value = null;
 
   try {
-    const response = await axios.post("http://localhost:8080/api/decode", {
+    const response = await axios.post(buildBackendUrl("/api/decode"), {
       url,
     });
     if (response.data && response.data.code === 200) {
@@ -303,8 +310,7 @@ const handleDecode = async () => {
     }
   } catch (error: any) {
     console.error(error);
-    let msg =
-      "网络连接失败，请检查后端服务是否正常启动 (http://localhost:8080)";
+    let msg = "网络连接失败，请检查后端服务是否正常启动，且当前设备可以访问该地址";
     if (error.response && error.response.data) {
       msg = error.response.data.message || msg;
       if (error.response.data.error) {
@@ -558,7 +564,7 @@ const deleteCustomGroup = (groupName: string) => {
     .then(async () => {
       try {
         const res = await axios.delete(
-          `http://localhost:8080/api/custom-groups/${customInfo.ID}`,
+          buildBackendUrl(`/api/custom-groups/${customInfo.ID}`),
         );
         if (res.data.code === 200) {
           ElMessage.success("自定义策略组已成功删除！");
@@ -604,12 +610,12 @@ const saveCustomGroup = async () => {
     let res;
     if (editingGroupId.value) {
       res = await axios.put(
-        `http://localhost:8080/api/custom-groups/${editingGroupId.value}`,
+        buildBackendUrl(`/api/custom-groups/${editingGroupId.value}`),
         newGroupForm.value,
       );
     } else {
       res = await axios.post(
-        "http://localhost:8080/api/custom-groups",
+        buildBackendUrl("/api/custom-groups"),
         newGroupForm.value,
       );
     }
@@ -716,7 +722,7 @@ const deleteCustomNode = (nodeName: string) => {
     .then(async () => {
       try {
         const res = await axios.delete(
-          `http://localhost:8080/api/custom-nodes/${customInfo.ID}`,
+          buildBackendUrl(`/api/custom-nodes/${customInfo.ID}`),
         );
         if (res.data.code === 200) {
           ElMessage.success("自定义节点已被彻底删除！");
@@ -739,7 +745,7 @@ const parseNodeLink = async () => {
   }
   isParsingLink.value = true;
   try {
-    const res = await axios.post("http://localhost:8080/api/parse-link", {
+    const res = await axios.post(buildBackendUrl("/api/parse-link"), {
       link: nodeLinkForm.value.link,
     });
     if (res.data.code === 200) {
@@ -784,12 +790,12 @@ const saveCustomNode = async () => {
     let res;
     if (editingNodeId.value) {
       res = await axios.put(
-        `http://localhost:8080/api/custom-nodes/${editingNodeId.value}`,
+        buildBackendUrl(`/api/custom-nodes/${editingNodeId.value}`),
         newNodeForm.value,
       );
     } else {
       res = await axios.post(
-        "http://localhost:8080/api/custom-nodes",
+        buildBackendUrl("/api/custom-nodes"),
         newNodeForm.value,
       );
     }
@@ -838,9 +844,9 @@ const batchSaveRules = async () => {
         target: row.target,
       };
       if (customInfo) {
-        return axios.put(`http://localhost:8080/api/custom-rules/${customInfo.ID}`, submitData);
+        return axios.put(buildBackendUrl(`/api/custom-rules/${customInfo.ID}`), submitData);
       } else {
-        return axios.post("http://localhost:8080/api/custom-rules", submitData);
+        return axios.post(buildBackendUrl("/api/custom-rules"), submitData);
       }
     });
 
@@ -921,7 +927,7 @@ const deleteCustomRule = (row: any) => {
     .then(async () => {
       try {
         const res = await axios.delete(
-          `http://localhost:8080/api/custom-rules/${customInfo.ID}`
+          buildBackendUrl(`/api/custom-rules/${customInfo.ID}`)
         );
         if (res.data.code === 200) {
           ElMessage.success("自定义分流规则已成功移除！");
@@ -957,12 +963,12 @@ const saveCustomRule = async () => {
     let res;
     if (editingRuleId.value) {
       res = await axios.put(
-        `http://localhost:8080/api/custom-rules/${editingRuleId.value}`,
+        buildBackendUrl(`/api/custom-rules/${editingRuleId.value}`),
         submitData
       );
     } else {
       res = await axios.post(
-        "http://localhost:8080/api/custom-rules",
+        buildBackendUrl("/api/custom-rules"),
         submitData
       );
     }
@@ -1049,7 +1055,7 @@ const handleFileUpload = async (event: any) => {
     reader.onload = async (e) => {
       try {
         const json = JSON.parse(e.target?.result as string);
-        const res = await axios.post("http://localhost:8080/api/import", json);
+        const res = await axios.post(buildBackendUrl("/api/import"), json);
         if (res.data.code === 200) {
           ElMessage.success(res.data.message || "备份导入成功！");
           await fetchCustomData();
@@ -1082,7 +1088,7 @@ const handleUserCommand = async (command: string) => {
       });
       
       try {
-        await axios.post("http://localhost:8080/api/logout");
+        await axios.post(buildBackendUrl("/api/logout"));
       } catch (e) {
         console.error("Logout request failed", e);
       }
@@ -1105,7 +1111,7 @@ const handleUserCommand = async (command: string) => {
     }
   } else if (command === "backupData") {
     try {
-      const res = await axios.get("http://localhost:8080/api/backup", {
+      const res = await axios.get(buildBackendUrl("/api/backup"), {
         responseType: "blob",
       });
       const url = window.URL.createObjectURL(new Blob([res.data]));
@@ -1134,7 +1140,7 @@ const submitChangePassword = async () => {
     if (valid) {
       isChangingPassword.value = true;
       try {
-        const res = await axios.post("http://localhost:8080/api/change-password", {
+        const res = await axios.post(buildBackendUrl("/api/change-password"), {
           old_password: passwordForm.value.oldPassword,
           new_password: passwordForm.value.newPassword,
         });
@@ -2113,7 +2119,7 @@ const submitChangePassword = async () => {
     >
       <div style="padding: 10px 0;">
         <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 14px; line-height: 1.5;">
-          请选择要使用的客户端配置地址。Clash/Mihomo 使用默认 YAML 订阅；Shadowrocket 请优先点击“安装到 Shadowrocket”创建新配置，失败时再复制配置地址到 iOS 的“配置”里通过 URL 下载，不要作为首页普通服务器订阅导入。
+          请选择要使用的客户端配置地址。Clash/Mihomo 使用默认 YAML 订阅；Surge 5 使用专用 .conf 配置地址；Shadowrocket 请优先点击“安装到 Shadowrocket”创建新配置，失败时再复制配置地址到 iOS 的“配置”里通过 URL 下载，不要作为首页普通服务器订阅导入。
           <template v-if="showRegeneratedWarning">
             <br/><br/>
             <strong style="color: var(--el-color-danger);">重新生成订阅会覆盖旧 token，旧订阅地址将立即失效。</strong>
@@ -2131,6 +2137,20 @@ const submitChangePassword = async () => {
             >
               <template #append>
                 <el-button icon="CopyDocument" @click="copySubLink" type="primary">复制</el-button>
+              </template>
+            </el-input>
+          </div>
+          <div>
+            <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">
+              Surge 5 配置地址
+            </div>
+            <el-input
+              v-model="surgeSubLink"
+              readonly
+              class="copy-input"
+            >
+              <template #append>
+                <el-button icon="CopyDocument" @click="copySurgeSubLink" type="warning">复制</el-button>
               </template>
             </el-input>
           </div>

@@ -11,7 +11,12 @@ import (
 	"gorm.io/gorm"
 )
 
+const defaultServerPort = 8080
+
 type Config struct {
+	Server struct {
+		Port int `toml:"port"`
+	} `toml:"server"`
 	Database struct {
 		Host     string `toml:"host"`
 		User     string `toml:"user"`
@@ -22,11 +27,11 @@ type Config struct {
 		TimeZone string `toml:"timezone"`
 	} `toml:"database"`
 	Auth struct {
-		CaptchaEnabled bool   `toml:"captcha_enabled"`
-		CaptchaLength  int    `toml:"captcha_length"`
-		CaptchaWidth   int    `toml:"captcha_width"`
-		CaptchaHeight  int    `toml:"captcha_height"`
-		CaptchaBgColor string `toml:"captcha_bg_color"`
+		CaptchaEnabled   bool   `toml:"captcha_enabled"`
+		CaptchaLength    int    `toml:"captcha_length"`
+		CaptchaWidth     int    `toml:"captcha_width"`
+		CaptchaHeight    int    `toml:"captcha_height"`
+		CaptchaBgColor   string `toml:"captcha_bg_color"`
 		CaptchaTextColor string `toml:"captcha_text_color"`
 	} `toml:"auth"`
 }
@@ -70,15 +75,13 @@ type CustomRule struct {
 }
 
 type Subscription struct {
-	ID        uint   `gorm:"primarykey"`
+	ID          uint   `gorm:"primarykey"`
 	URL         string `gorm:"uniqueIndex;not null"`
 	RawResponse string `gorm:"type:text"`
 	Decoded     string `gorm:"type:text"`
-	CreatedAt int64  `gorm:"autoCreateTime"`
-	UpdatedAt int64  `gorm:"autoUpdateTime"`
+	CreatedAt   int64  `gorm:"autoCreateTime"`
+	UpdatedAt   int64  `gorm:"autoUpdateTime"`
 }
-
-
 
 func initDB() {
 	var cfg Config
@@ -90,6 +93,8 @@ func initDB() {
 		}
 	} else {
 		log.Println("config.toml not found, relying on environment variables or default values.")
+		cfg.Server.Port = defaultServerPort
+
 		// 数据库默认退避参数
 		cfg.Database.Port = 5432
 		cfg.Database.SSLMode = "disable"
@@ -102,6 +107,16 @@ func initDB() {
 		cfg.Auth.CaptchaHeight = 60
 		cfg.Auth.CaptchaBgColor = "rgba(15, 23, 42, 0.6)"
 		cfg.Auth.CaptchaTextColor = "#FFFFFF"
+	}
+
+	if cfg.Server.Port <= 0 {
+		cfg.Server.Port = defaultServerPort
+	}
+	if envServerPort := os.Getenv("SERVER_PORT"); envServerPort != "" {
+		var p int
+		if _, err := fmt.Sscanf(envServerPort, "%d", &p); err == nil && p > 0 {
+			cfg.Server.Port = p
+		}
 	}
 
 	// 针对云原生部署：从环境变量读取并覆写数据库配置

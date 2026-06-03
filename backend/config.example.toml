@@ -1,3 +1,7 @@
+[server]
+# 服务端监听端口
+port = 8080
+
 [database]
 host = "127.0.0.1"
 user = "your_username"

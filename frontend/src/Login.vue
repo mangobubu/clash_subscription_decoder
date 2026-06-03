@@ -67,6 +67,7 @@ import { ref, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Loading } from '@element-plus/icons-vue';
 import axios from 'axios';
+import { buildBackendUrl } from './config/backend';
 
 const emit = defineEmits(['login-success']);
 
@@ -82,14 +83,14 @@ const textColor = ref('');
 
 const fetchCaptcha = async () => {
   try {
-    const initRes = await axios.get('http://localhost:8080/api/check-init');
+    const initRes = await axios.get(buildBackendUrl('/api/check-init'));
     isInitMode.value = initRes.data.data.need_init;
   } catch (error) {
     console.error('Failed to check init status', error);
   }
 
   try {
-    const res = await axios.get('http://localhost:8080/api/captcha');
+    const res = await axios.get(buildBackendUrl('/api/captcha'));
     if (res.data.code === 200) {
       if (res.data.data.enabled) {
         captchaEnabled.value = true;
@@ -123,7 +124,7 @@ const handleLogin = async () => {
   if (isInitMode.value) {
     isLoading.value = true;
     try {
-      await axios.post('http://localhost:8080/api/init', {
+      await axios.post(buildBackendUrl('/api/init'), {
         username: username.value,
         password: password.value,
         captcha_id: captchaId.value,
@@ -145,7 +146,7 @@ const handleLogin = async () => {
 
   isLoading.value = true;
   try {
-    const res = await axios.post('http://localhost:8080/api/login', {
+    const res = await axios.post(buildBackendUrl('/api/login'), {
       username: username.value,
       password: password.value,
       captcha_id: captchaId.value,

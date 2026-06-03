@@ -61,6 +61,7 @@ func main() {
 	r.POST("/api/login", handleLogin)
 	r.GET("/sub", handleFinalSubscription)                      // 最终订阅地址
 	r.GET("/shadowrocket.conf", handleShadowrocketSubscription) // Shadowrocket 配置文件地址
+	r.GET("/surge.conf", handleSurgeSubscription)               // Surge 5 配置文件地址
 	r.GET("/shadowrocket/config/:tokenFile", handleShadowrocketPathSubscription)
 	r.GET("/shadowrocket/install", handleShadowrocketInstall) // Shadowrocket 一键安装桥接页
 
@@ -116,8 +117,8 @@ func main() {
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 
-		// 如果是后端 API 或订阅请求但没匹配到，走 404 处理，不要 fallback 返回 index.html
-		if strings.HasPrefix(path, "/api") || strings.HasPrefix(path, "/sub") {
+		// 如果是后端 API 或配置订阅请求但没匹配到，走 404 处理，不要 fallback 返回 index.html
+		if isBackendOnlyPath(path) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Not Found"})
 			return
 		}
@@ -151,11 +152,20 @@ func main() {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 	})
 
-	// 启动服务，默认监听 8080 端口
-	log.Println("Starting Clash Proxy Decoder backend on :8080...")
-	if err := r.Run(":8080"); err != nil {
+	// 启动服务，端口由 config.toml 的 [server].port 或 SERVER_PORT 环境变量控制
+	serverAddress := fmt.Sprintf(":%d", AppConfig.Server.Port)
+	log.Printf("Starting Clash Proxy Decoder backend on %s...", serverAddress)
+	if err := r.Run(serverAddress); err != nil {
 		log.Fatalf("Failed to run server: %v", err)
 	}
+}
+
+func isBackendOnlyPath(path string) bool {
+	return strings.HasPrefix(path, "/api") ||
+		strings.HasPrefix(path, "/sub") ||
+		strings.HasPrefix(path, "/surge.conf") ||
+		strings.HasPrefix(path, "/shadowrocket.conf") ||
+		strings.HasPrefix(path, "/shadowrocket")
 }
 
 // CORSMiddleware 跨域中间件
@@ -1607,7 +1617,7 @@ func handleFinalSubscription(c *gin.Context) {
 	if format == "" {
 		format = "clash"
 	}
-	if format != "clash" && format != "shadowrocket" {
+	if !isSupportedSubscriptionFormat(format) {
 		c.String(http.StatusBadRequest, "Unsupported subscription format: "+format)
 		return
 	}
@@ -1618,6 +1628,11 @@ func handleFinalSubscription(c *gin.Context) {
 // handleShadowrocketSubscription 使用明确的 .conf 路径输出 Shadowrocket 配置文件。
 func handleShadowrocketSubscription(c *gin.Context) {
 	serveSubscriptionByFormat(c, "shadowrocket")
+}
+
+// handleSurgeSubscription 使用明确的 .conf 路径输出 Surge 5 配置文件。
+func handleSurgeSubscription(c *gin.Context) {
+	serveSubscriptionByFormat(c, "surge")
 }
 
 func handleShadowrocketPathSubscription(c *gin.Context) {
@@ -1682,6 +1697,15 @@ func buildShadowrocketInstallHTML(installURL string) string {
   <script>window.location.replace(%q);</script>
 </body>
 </html>`, html.EscapeString(installURL), html.EscapeString(installURL), installURL)
+}
+
+func isSupportedSubscriptionFormat(format string) bool {
+	switch format {
+	case "clash", "shadowrocket", "surge":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildAbsoluteRequestURL(c *gin.Context, path string) string {
@@ -1771,6 +1795,17 @@ func serveFinalSubscription(c *gin.Context, format string, clashYAML string) {
 		}
 		c.Header("Content-Disposition", "attachment; filename=\"shadowrocket.conf\"")
 		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(shadowrocketConfig))
+		return
+	}
+
+	if format == "surge" {
+		surgeConfig, err := ConvertClashYAMLToSurge(clashYAML)
+		if err != nil {
+			c.String(http.StatusUnprocessableEntity, "Failed to generate Surge config: "+err.Error())
+			return
+		}
+		c.Header("Content-Disposition", "attachment; filename=\"surge.conf\"")
+		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(surgeConfig))
 		return
 	}
 
