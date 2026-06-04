@@ -61,7 +61,8 @@ func main() {
 	r.POST("/api/login", handleLogin)
 	r.GET("/sub", handleFinalSubscription)                      // 最终订阅地址
 	r.GET("/shadowrocket.conf", handleShadowrocketSubscription) // Shadowrocket 配置文件地址
-	r.GET("/surge.conf", handleSurgeSubscription)               // Surge 5 配置文件地址
+	r.GET("/surge.conf", handleSurgeSubscription)               // Surge 最新版配置文件地址
+	r.GET("/surge-5.7.6.conf", handleSurge576Subscription)      // Surge 5.7.6 兼容配置文件地址
 	r.GET("/shadowrocket/config/:tokenFile", handleShadowrocketPathSubscription)
 	r.GET("/shadowrocket/install", handleShadowrocketInstall) // Shadowrocket 一键安装桥接页
 
@@ -164,6 +165,7 @@ func isBackendOnlyPath(path string) bool {
 	return strings.HasPrefix(path, "/api") ||
 		strings.HasPrefix(path, "/sub") ||
 		strings.HasPrefix(path, "/surge.conf") ||
+		strings.HasPrefix(path, "/surge-5.7.6.conf") ||
 		strings.HasPrefix(path, "/shadowrocket.conf") ||
 		strings.HasPrefix(path, "/shadowrocket")
 }
@@ -1630,9 +1632,14 @@ func handleShadowrocketSubscription(c *gin.Context) {
 	serveSubscriptionByFormat(c, "shadowrocket")
 }
 
-// handleSurgeSubscription 使用明确的 .conf 路径输出 Surge 5 配置文件。
+// handleSurgeSubscription 使用明确的 .conf 路径输出 Surge 最新版配置文件。
 func handleSurgeSubscription(c *gin.Context) {
 	serveSubscriptionByFormat(c, "surge")
+}
+
+// handleSurge576Subscription 使用明确的 .conf 路径输出 Surge 5.7.6 兼容配置文件。
+func handleSurge576Subscription(c *gin.Context) {
+	serveSubscriptionByFormat(c, "surge-5.7.6")
 }
 
 func handleShadowrocketPathSubscription(c *gin.Context) {
@@ -1701,7 +1708,7 @@ func buildShadowrocketInstallHTML(installURL string) string {
 
 func isSupportedSubscriptionFormat(format string) bool {
 	switch format {
-	case "clash", "shadowrocket", "surge":
+	case "clash", "shadowrocket", "surge", "surge-5.7.6":
 		return true
 	default:
 		return false
@@ -1798,16 +1805,26 @@ func serveFinalSubscription(c *gin.Context, format string, clashYAML string) {
 		return
 	}
 
-	if format == "surge" {
-		surgeConfig, err := ConvertClashYAMLToSurge(clashYAML)
+	if strings.HasPrefix(format, "surge") {
+		surgeConfig, filename, err := convertFinalSubscriptionToSurge(format, clashYAML)
 		if err != nil {
 			c.String(http.StatusUnprocessableEntity, "Failed to generate Surge config: "+err.Error())
 			return
 		}
-		c.Header("Content-Disposition", "attachment; filename=\"surge.conf\"")
+		c.Header("Content-Disposition", "attachment; filename=\""+filename+"\"")
 		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(surgeConfig))
 		return
 	}
 
 	c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(clashYAML))
+}
+
+func convertFinalSubscriptionToSurge(format string, clashYAML string) (string, string, error) {
+	if format == "surge-5.7.6" {
+		config, err := ConvertClashYAMLToSurge576(clashYAML)
+		return config, "surge-5.7.6.conf", err
+	}
+
+	config, err := ConvertClashYAMLToSurge(clashYAML)
+	return config, "surge.conf", err
 }

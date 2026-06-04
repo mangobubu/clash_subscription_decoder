@@ -23,6 +23,10 @@ export default defineConfig(({ mode }) => {
           target: devProxyTarget,
           changeOrigin: true,
         },
+        '/surge-5.7.6.conf': {
+          target: devProxyTarget,
+          changeOrigin: true,
+        },
         '/shadowrocket.conf': {
           target: devProxyTarget,
           changeOrigin: true,

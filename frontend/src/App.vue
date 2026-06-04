@@ -57,13 +57,16 @@ const subLinkDialogVisible = ref(false);
 const subLinkDialogTitle = ref("复制订阅地址");
 const showRegeneratedWarning = ref(false);
 const finalSubLink = ref("");
-const surgeSubLink = ref("");
+const surgeLatestSubLink = ref("");
+const surge576SubLink = ref("");
 const shadowrocketSubLink = ref("");
 const shadowrocketInstallLink = ref("");
 
 const buildSubLink = (token: string) => buildPublicBackendUrl(`/sub?token=${encodeURIComponent(token)}`);
-const buildSurgeSubLink = (token: string) =>
+const buildSurgeLatestSubLink = (token: string) =>
   buildPublicBackendUrl(`/surge.conf?token=${encodeURIComponent(token)}`);
+const buildSurge576SubLink = (token: string) =>
+  buildPublicBackendUrl(`/surge-5.7.6.conf?token=${encodeURIComponent(token)}`);
 const buildShadowrocketSubLink = (token: string) =>
   buildPublicBackendUrl(`/shadowrocket.conf?token=${encodeURIComponent(token)}`);
 const buildShadowrocketInstallLink = (token: string) =>
@@ -71,7 +74,8 @@ const buildShadowrocketInstallLink = (token: string) =>
 
 const setFinalSubLinks = (token: string) => {
   finalSubLink.value = buildSubLink(token);
-  surgeSubLink.value = buildSurgeSubLink(token);
+  surgeLatestSubLink.value = buildSurgeLatestSubLink(token);
+  surge576SubLink.value = buildSurge576SubLink(token);
   shadowrocketSubLink.value = buildShadowrocketSubLink(token);
   shadowrocketInstallLink.value = buildShadowrocketInstallLink(token);
 };
@@ -87,8 +91,11 @@ const copyTextToClipboard = async (text: string, successMessage = "链接已复�
 
 const copySubLink = () => copyTextToClipboard(finalSubLink.value);
 
-const copySurgeSubLink = () =>
-  copyTextToClipboard(surgeSubLink.value, "Surge 5 配置地址已复制到剪贴板！");
+const copySurgeLatestSubLink = () =>
+  copyTextToClipboard(surgeLatestSubLink.value, "Surge 最新版配置地址已复制到剪贴板！");
+
+const copySurge576SubLink = () =>
+  copyTextToClipboard(surge576SubLink.value, "Surge 5.7.6 兼容配置地址已复制到剪贴板！");
 
 const copyShadowrocketSubLink = () =>
   copyTextToClipboard(shadowrocketSubLink.value, "Shadowrocket 配置地址已复制到剪贴板！");
@@ -2119,7 +2126,7 @@ const submitChangePassword = async () => {
     >
       <div style="padding: 10px 0;">
         <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 14px; line-height: 1.5;">
-          请选择要使用的客户端配置地址。Clash/Mihomo 使用默认 YAML 订阅；Surge 5 使用专用 .conf 配置地址；Shadowrocket 请优先点击“安装到 Shadowrocket”创建新配置，失败时再复制配置地址到 iOS 的“配置”里通过 URL 下载，不要作为首页普通服务器订阅导入。
+          请选择要使用的客户端配置地址。Clash/Mihomo 使用默认 YAML 订阅；Surge 最新版与 Surge 5.7.6 使用各自专用 .conf 配置地址；Shadowrocket 请优先点击“安装到 Shadowrocket”创建新配置，失败时再复制配置地址到 iOS 的“配置”里通过 URL 下载，不要作为首页普通服务器订阅导入。
           <template v-if="showRegeneratedWarning">
             <br/><br/>
             <strong style="color: var(--el-color-danger);">重新生成订阅会覆盖旧 token，旧订阅地址将立即失效。</strong>
@@ -2142,15 +2149,29 @@ const submitChangePassword = async () => {
           </div>
           <div>
             <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">
-              Surge 5 配置地址
+              Surge 最新版配置地址
             </div>
             <el-input
-              v-model="surgeSubLink"
+              v-model="surgeLatestSubLink"
               readonly
               class="copy-input"
             >
               <template #append>
-                <el-button icon="CopyDocument" @click="copySurgeSubLink" type="warning">复制</el-button>
+                <el-button icon="CopyDocument" @click="copySurgeLatestSubLink" type="warning">复制</el-button>
+              </template>
+            </el-input>
+          </div>
+          <div>
+            <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">
+              Surge 5.7.6 兼容配置地址
+            </div>
+            <el-input
+              v-model="surge576SubLink"
+              readonly
+              class="copy-input"
+            >
+              <template #append>
+                <el-button icon="CopyDocument" @click="copySurge576SubLink" type="warning">复制</el-button>
               </template>
             </el-input>
           </div>

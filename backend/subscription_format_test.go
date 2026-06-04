@@ -3,7 +3,7 @@ package main
 import "testing"
 
 func TestIsSupportedSubscriptionFormat(t *testing.T) {
-	supported := []string{"clash", "shadowrocket", "surge"}
+	supported := []string{"clash", "shadowrocket", "surge", "surge-5.7.6"}
 	for _, format := range supported {
 		if !isSupportedSubscriptionFormat(format) {
 			t.Fatalf("expected format %q to be supported", format)
@@ -24,6 +24,7 @@ func TestIsBackendOnlyPath(t *testing.T) {
 		"/sub",
 		"/sub/path",
 		"/surge.conf",
+		"/surge-5.7.6.conf",
 		"/shadowrocket.conf",
 		"/shadowrocket/install",
 	}
