@@ -834,17 +834,19 @@ func buildManualRuleLines(rules []CustomRule) []string {
 	}
 
 	lines := make([]string, 0, len(rules))
+	terminalLines := make([]string, 0, 1)
 	for _, rule := range rules {
 		if rule.Target == deletedCustomRuleTarget {
 			continue
 		}
-		if rule.Payload == "-" || strings.TrimSpace(rule.Payload) == "" {
-			lines = append(lines, fmt.Sprintf("%s,%s", rule.Type, rule.Target))
+		ruleLine, _ := customRuleLineAndFingerprint(rule)
+		if isTerminalRuleType(rule.Type) {
+			terminalLines = append(terminalLines, ruleLine)
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("%s,%s,%s", rule.Type, rule.Payload, rule.Target))
+		lines = append(lines, ruleLine)
 	}
-	return lines
+	return append(lines, terminalLines...)
 }
 
 func refreshProfileCache(profile *SubscriptionProfile) error {

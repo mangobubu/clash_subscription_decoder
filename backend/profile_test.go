@@ -184,6 +184,20 @@ func TestBuildManualProfileYAMLFromResourcesSkipsDeletedRules(t *testing.T) {
 	}
 }
 
+func TestBuildManualRuleLinesKeepsTerminalRulesAtEnd(t *testing.T) {
+	got := buildManualRuleLines([]CustomRule{
+		{Type: "DOMAIN-SUFFIX", Payload: "before.example", Target: "DIRECT"},
+		{Type: "MATCH", Payload: "-", Target: "Leak"},
+		{Type: "DOMAIN-SUFFIX", Payload: "after.example", Target: "DIRECT"},
+	})
+
+	assertStringSliceEqual(t, got, []string{
+		"DOMAIN-SUFFIX,before.example,DIRECT",
+		"DOMAIN-SUFFIX,after.example,DIRECT",
+		"MATCH,Leak",
+	})
+}
+
 func TestApplyResourceOrderToYAMLContentOrdersNodes(t *testing.T) {
 	content := `proxies:
   - name: 节点 A
