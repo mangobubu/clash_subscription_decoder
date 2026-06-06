@@ -13,6 +13,11 @@ import (
 
 const defaultServerPort = 8080
 
+const (
+	profileSourceRemote = "remote"
+	profileSourceLocal  = "local"
+)
+
 type Config struct {
 	Server struct {
 		Port int `toml:"port"`
@@ -49,7 +54,8 @@ type User struct {
 
 type CustomProxyGroup struct {
 	ID        uint   `gorm:"primarykey"`
-	Name      string `gorm:"uniqueIndex;not null"`
+	ProfileID uint   `gorm:"not null;default:0;uniqueIndex:idx_profile_group_name"`
+	Name      string `gorm:"not null;uniqueIndex:idx_profile_group_name"`
 	Type      string `gorm:"not null"`
 	Proxies   string `gorm:"type:text;not null"` // JSON array of string
 	Exclude   string `gorm:"type:text"`          // 排除关键字或正则表达式
@@ -58,7 +64,8 @@ type CustomProxyGroup struct {
 
 type CustomNode struct {
 	ID        uint   `gorm:"primarykey"`
-	Name      string `gorm:"uniqueIndex;not null"`
+	ProfileID uint   `gorm:"not null;default:0;uniqueIndex:idx_profile_node_name"`
+	Name      string `gorm:"not null;uniqueIndex:idx_profile_node_name"`
 	Type      string `gorm:"not null"`
 	Server    string `gorm:"not null"`
 	Port      int    `gorm:"not null"`
@@ -68,10 +75,24 @@ type CustomNode struct {
 
 type CustomRule struct {
 	ID        uint   `gorm:"primarykey"`
-	Type      string `gorm:"uniqueIndex:idx_type_payload;not null"` // 如 DOMAIN-SUFFIX
-	Payload   string `gorm:"uniqueIndex:idx_type_payload;not null"` // 如 google.com
-	Target    string `gorm:"not null"`                              // 如 PROXY
+	ProfileID uint   `gorm:"not null;default:0;uniqueIndex:idx_profile_type_payload"`
+	Type      string `gorm:"uniqueIndex:idx_profile_type_payload;not null"` // 如 DOMAIN-SUFFIX
+	Payload   string `gorm:"uniqueIndex:idx_profile_type_payload;not null"` // 如 google.com
+	Target    string `gorm:"not null"`                                      // 如 PROXY
 	CreatedAt int64  `gorm:"autoCreateTime"`
+}
+
+type SubscriptionProfile struct {
+	ID           uint   `gorm:"primarykey" json:"id"`
+	Name         string `gorm:"uniqueIndex;not null" json:"name"`
+	SourceType   string `gorm:"not null;default:remote" json:"source_type"`
+	URL          string `gorm:"type:text" json:"url"`
+	LocalContent string `gorm:"type:text" json:"local_content"`
+	RawResponse  string `gorm:"type:text" json:"raw_response"`
+	Decoded      string `gorm:"type:text" json:"decoded"`
+	SubToken     string `gorm:"type:text;index" json:"sub_token"`
+	CreatedAt    int64  `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt    int64  `gorm:"autoUpdateTime" json:"updated_at"`
 }
 
 type Subscription struct {
@@ -170,8 +191,11 @@ func initDB() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
+	dropLegacyGlobalUniqueIndexes(db)
+
 	err = db.AutoMigrate(
 		&User{},
+		&SubscriptionProfile{},
 		&CustomProxyGroup{},
 		&CustomNode{},
 		&CustomRule{},
@@ -181,14 +205,76 @@ func initDB() {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
 
+	if err := migrateLegacyProfileData(db); err != nil {
+		log.Fatalf("Failed to migrate legacy profile data: %v", err)
+	}
+
 	DB = db
 	log.Println("Database initialized successfully.")
 }
 
+func dropLegacyGlobalUniqueIndexes(db *gorm.DB) {
+	indexes := []string{
+		"idx_custom_proxy_groups_name",
+		"idx_custom_nodes_name",
+		"idx_type_payload",
+	}
+	for _, indexName := range indexes {
+		if err := db.Exec("DROP INDEX IF EXISTS " + indexName).Error; err != nil {
+			log.Printf("drop legacy index %s warning: %v", indexName, err)
+		}
+	}
+}
+
+func migrateLegacyProfileData(db *gorm.DB) error {
+	var profile SubscriptionProfile
+	if err := db.Order("id asc").First(&profile).Error; err == nil {
+		return assignLegacyResourcesToProfile(db, profile.ID)
+	}
+
+	var legacySub Subscription
+	hasLegacySub := db.Order("updated_at desc").First(&legacySub).Error == nil
+
+	var user User
+	hasUser := db.Where("sub_token <> ''").Order("id asc").First(&user).Error == nil
+
+	profile = SubscriptionProfile{
+		Name:       "默认配置",
+		SourceType: profileSourceLocal,
+	}
+	if hasLegacySub {
+		profile.SourceType = profileSourceRemote
+		profile.URL = legacySub.URL
+		profile.RawResponse = legacySub.RawResponse
+		profile.Decoded = legacySub.Decoded
+	}
+	if hasUser {
+		profile.SubToken = user.SubToken
+	}
+
+	if err := db.Create(&profile).Error; err != nil {
+		return err
+	}
+	return assignLegacyResourcesToProfile(db, profile.ID)
+}
+
+func assignLegacyResourcesToProfile(db *gorm.DB, profileID uint) error {
+	if err := db.Model(&CustomProxyGroup{}).Where("profile_id = 0").Update("profile_id", profileID).Error; err != nil {
+		return err
+	}
+	if err := db.Model(&CustomNode{}).Where("profile_id = 0").Update("profile_id", profileID).Error; err != nil {
+		return err
+	}
+	if err := db.Model(&CustomRule{}).Where("profile_id = 0").Update("profile_id", profileID).Error; err != nil {
+		return err
+	}
+	return nil
+}
+
 // GetCustomProxyGroups returns all custom proxy groups
-func GetCustomProxyGroups() ([]CustomProxyGroup, error) {
+func GetCustomProxyGroups(profileID uint) ([]CustomProxyGroup, error) {
 	var groups []CustomProxyGroup
-	err := DB.Find(&groups).Error
+	err := DB.Where("profile_id = ?", profileID).Find(&groups).Error
 	return groups, err
 }
 
@@ -202,15 +288,15 @@ func (g *CustomProxyGroup) GetProxiesList() []string {
 }
 
 // GetCustomNodes returns all custom proxy nodes
-func GetCustomNodes() ([]CustomNode, error) {
+func GetCustomNodes(profileID uint) ([]CustomNode, error) {
 	var nodes []CustomNode
-	err := DB.Find(&nodes).Error
+	err := DB.Where("profile_id = ?", profileID).Find(&nodes).Error
 	return nodes, err
 }
 
 // GetCustomRules returns all custom routing rules
-func GetCustomRules() ([]CustomRule, error) {
+func GetCustomRules(profileID uint) ([]CustomRule, error) {
 	var rules []CustomRule
-	err := DB.Find(&rules).Error
+	err := DB.Where("profile_id = ?", profileID).Find(&rules).Error
 	return rules, err
 }

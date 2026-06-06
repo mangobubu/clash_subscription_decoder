@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,14 +35,19 @@ var frontendFS embed.FS
 
 // DecodeRequest 定义解码请求的参数结构
 type DecodeRequest struct {
-	URL string `json:"url" binding:"required"`
+	URL       string `json:"url" binding:"required"`
+	ProfileID uint   `json:"profile_id"`
 }
 
 // DecodeResponse 定义解码成功的响应结构
 type DecodeResponse struct {
+	ID          uint   `json:"id"`
+	Name        string `json:"name"`
+	SourceType  string `json:"source_type"`
 	URL         string `json:"url"`
 	RawResponse string `json:"raw_response"`
 	Decoded     string `json:"decoded"`
+	UpdatedAt   int64  `json:"updated_at"`
 }
 
 func main() {
@@ -84,7 +90,16 @@ func main() {
 	// 注册解码接口
 	api.POST("/decode", handleDecode)
 
-	// 注册获取最新订阅接口
+	// 注册多配置与获取订阅接口
+	api.GET("/profiles", handleListProfiles)
+	api.POST("/profiles", handleCreateProfile)
+	api.PUT("/profiles/:id", handleUpdateProfile)
+	api.DELETE("/profiles/:id", handleDeleteProfile)
+	api.POST("/profiles/:id/refresh", handleRefreshProfile)
+	api.GET("/profiles/:id/subscription", handleGetProfileSubscription)
+	api.GET("/profiles/:id/sub-token", handleGetProfileSubToken)
+	api.POST("/profiles/:id/generate-sub-token", handleGenerateProfileSubToken)
+	api.POST("/profiles/:id/copy-rules", handleCopyProfileRules)
 	api.GET("/subscription", handleGetSubscription)
 
 	// 注册解析节点链接接口
@@ -434,14 +449,464 @@ func handleChangePassword(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "密码修改成功，请使用新密码重新登录"})
 }
 
+type profileWriteRequest struct {
+	Name         string `json:"name" binding:"required"`
+	SourceType   string `json:"source_type" binding:"required"`
+	URL          string `json:"url"`
+	LocalContent string `json:"local_content"`
+}
+
+type copyProfileRulesRequest struct {
+	SourceProfileID uint `json:"source_profile_id" binding:"required"`
+}
+
+func normalizeProfileSourceType(sourceType string) string {
+	sourceType = strings.ToLower(strings.TrimSpace(sourceType))
+	if sourceType == profileSourceLocal {
+		return profileSourceLocal
+	}
+	return profileSourceRemote
+}
+
+func sanitizeVisibleASCII(input string) string {
+	var clean strings.Builder
+	for _, r := range strings.TrimSpace(input) {
+		if r > 32 && r < 127 {
+			clean.WriteRune(r)
+		}
+	}
+	return clean.String()
+}
+
+func normalizeSubscriptionURL(input string) (string, error) {
+	targetURL := sanitizeVisibleASCII(input)
+	if targetURL == "" {
+		return "", fmt.Errorf("地址不能为空")
+	}
+	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+		targetURL = "https://" + targetURL
+	}
+	return targetURL, nil
+}
+
+func getDefaultProfile() (SubscriptionProfile, error) {
+	var profile SubscriptionProfile
+	err := DB.Order("id asc").First(&profile).Error
+	return profile, err
+}
+
+func getProfileFromParam(c *gin.Context) (SubscriptionProfile, bool) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "配置 ID 不合法"})
+		return SubscriptionProfile{}, false
+	}
+
+	var profile SubscriptionProfile
+	if err := DB.First(&profile, uint(id)).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "配置不存在"})
+		return SubscriptionProfile{}, false
+	}
+	return profile, true
+}
+
+func resolveRequestProfileID(c *gin.Context, bodyProfileID uint) (uint, bool) {
+	if bodyProfileID > 0 {
+		return bodyProfileID, true
+	}
+	if queryID := strings.TrimSpace(c.Query("profile_id")); queryID != "" {
+		id, err := strconv.ParseUint(queryID, 10, 64)
+		if err != nil || id == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "配置 ID 不合法"})
+			return 0, false
+		}
+		return uint(id), true
+	}
+
+	profile, err := getDefaultProfile()
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "暂无可用配置，请先创建配置"})
+		return 0, false
+	}
+	return profile.ID, true
+}
+
+func decodeResponseFromProfile(profile SubscriptionProfile) DecodeResponse {
+	return DecodeResponse{
+		ID:          profile.ID,
+		Name:        profile.Name,
+		SourceType:  profile.SourceType,
+		URL:         profile.URL,
+		RawResponse: truncateString(profile.RawResponse, 1000),
+		Decoded:     profile.Decoded,
+		UpdatedAt:   profile.UpdatedAt,
+	}
+}
+
+func profileListItem(profile SubscriptionProfile) gin.H {
+	return gin.H{
+		"id":            profile.ID,
+		"name":          profile.Name,
+		"source_type":   profile.SourceType,
+		"url":           profile.URL,
+		"local_content": profile.LocalContent,
+		"has_token":     profile.SubToken != "",
+		"created_at":    profile.CreatedAt,
+		"updated_at":    profile.UpdatedAt,
+	}
+}
+
+func validateProfileWriteRequest(req profileWriteRequest) (profileWriteRequest, error) {
+	req.Name = strings.TrimSpace(req.Name)
+	req.SourceType = normalizeProfileSourceType(req.SourceType)
+	req.URL = strings.TrimSpace(req.URL)
+	if req.Name == "" {
+		return req, fmt.Errorf("配置名称不能为空")
+	}
+	if req.SourceType == profileSourceRemote {
+		targetURL, err := normalizeSubscriptionURL(req.URL)
+		if err != nil {
+			return req, err
+		}
+		req.URL = targetURL
+		req.LocalContent = ""
+		return req, nil
+	}
+	if strings.TrimSpace(req.LocalContent) == "" {
+		return req, fmt.Errorf("本地 YAML 配置内容不能为空")
+	}
+	req.URL = ""
+	return req, nil
+}
+
+type profileContentFetcher func(string) (string, error)
+
+func loadProfileRawContent(profile SubscriptionProfile, fetcher profileContentFetcher) (string, bool, error) {
+	if normalizeProfileSourceType(profile.SourceType) == profileSourceLocal {
+		content := profile.LocalContent
+		if strings.TrimSpace(content) == "" {
+			return "", false, fmt.Errorf("本地 YAML 配置内容为空")
+		}
+		return content, false, nil
+	}
+
+	targetURL := strings.TrimSpace(profile.URL)
+	if targetURL == "" {
+		return "", true, fmt.Errorf("订阅地址为空")
+	}
+	rawResponse, err := fetcher(targetURL)
+	return rawResponse, true, err
+}
+
+func looksLikePlainSubscriptionConfig(content string) bool {
+	return strings.Contains(content, "proxies:") ||
+		strings.Contains(content, "proxy-groups:") ||
+		strings.Contains(content, "proxy-providers:") ||
+		strings.Contains(content, "rules:") ||
+		strings.Contains(content, "outbounds:") ||
+		strings.Contains(content, "servers:")
+}
+
+func refreshProfileCache(profile *SubscriptionProfile) error {
+	rawContent, fetchedRemote, err := loadProfileRawContent(*profile, fetchURLContent)
+	if err != nil {
+		return err
+	}
+
+	decodedContent, err := ProcessSubscriptionRawData(rawContent, profile.ID)
+	if err != nil {
+		return err
+	}
+
+	if fetchedRemote {
+		profile.RawResponse = rawContent
+	} else {
+		profile.RawResponse = profile.LocalContent
+	}
+	profile.Decoded = decodedContent
+	return DB.Save(profile).Error
+}
+
+func generateProfileSubToken(profile SubscriptionProfile) string {
+	rawToken := fmt.Sprintf("profile:%d|%d|%s", profile.ID, time.Now().Unix(), uuid.New().String())
+	return base64.URLEncoding.EncodeToString([]byte(rawToken))
+}
+
+func handleListProfiles(c *gin.Context) {
+	var profiles []SubscriptionProfile
+	if err := DB.Order("updated_at desc, id asc").Find(&profiles).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取配置列表失败"})
+		return
+	}
+
+	items := make([]gin.H, 0, len(profiles))
+	for _, profile := range profiles {
+		items = append(items, profileListItem(profile))
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": items})
+}
+
+func handleCreateProfile(c *gin.Context) {
+	var req profileWriteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+
+	normalizedReq, err := validateProfileWriteRequest(req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+
+	profile := SubscriptionProfile{
+		Name:         normalizedReq.Name,
+		SourceType:   normalizedReq.SourceType,
+		URL:          normalizedReq.URL,
+		LocalContent: normalizedReq.LocalContent,
+	}
+	if err := DB.Create(&profile).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建配置失败", "error": err.Error()})
+		return
+	}
+
+	if profile.SourceType == profileSourceLocal {
+		if err := refreshProfileCache(&profile); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"code": 422, "message": "本地配置解析失败", "error": err.Error()})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "配置创建成功", "data": profileListItem(profile)})
+}
+
+func handleUpdateProfile(c *gin.Context) {
+	profile, ok := getProfileFromParam(c)
+	if !ok {
+		return
+	}
+
+	var req profileWriteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+
+	normalizedReq, err := validateProfileWriteRequest(req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+
+	profile.Name = normalizedReq.Name
+	profile.SourceType = normalizedReq.SourceType
+	profile.URL = normalizedReq.URL
+	profile.LocalContent = normalizedReq.LocalContent
+	if profile.SourceType == profileSourceRemote {
+		profile.RawResponse = ""
+		profile.Decoded = ""
+	}
+
+	if err := DB.Save(&profile).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新配置失败", "error": err.Error()})
+		return
+	}
+
+	if profile.SourceType == profileSourceLocal {
+		if err := refreshProfileCache(&profile); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"code": 422, "message": "本地配置解析失败", "error": err.Error()})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "配置更新成功", "data": profileListItem(profile)})
+}
+
+func handleDeleteProfile(c *gin.Context) {
+	profile, ok := getProfileFromParam(c)
+	if !ok {
+		return
+	}
+
+	var count int64
+	DB.Model(&SubscriptionProfile{}).Count(&count)
+	if count <= 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "至少需要保留一个配置"})
+		return
+	}
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("profile_id = ?", profile.ID).Delete(&CustomProxyGroup{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("profile_id = ?", profile.ID).Delete(&CustomNode{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("profile_id = ?", profile.ID).Delete(&CustomRule{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&profile).Error
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除配置失败", "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "配置已删除"})
+}
+
+func handleRefreshProfile(c *gin.Context) {
+	profile, ok := getProfileFromParam(c)
+	if !ok {
+		return
+	}
+
+	if err := refreshProfileCache(&profile); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "刷新配置失败", "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "配置刷新成功", "data": decodeResponseFromProfile(profile)})
+}
+
+func handleGetProfileSubscription(c *gin.Context) {
+	profile, ok := getProfileFromParam(c)
+	if !ok {
+		return
+	}
+
+	if profile.Decoded == "" && profile.SourceType == profileSourceLocal {
+		_ = refreshProfileCache(&profile)
+	}
+	if profile.Decoded == "" {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "当前配置暂无缓存，请先刷新配置"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": decodeResponseFromProfile(profile)})
+}
+
+func handleGetProfileSubToken(c *gin.Context) {
+	profile, ok := getProfileFromParam(c)
+	if !ok {
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "获取成功",
+		"data": gin.H{
+			"token":     profile.SubToken,
+			"has_token": profile.SubToken != "",
+			"profile":   profileListItem(profile),
+		},
+	})
+}
+
+func handleGenerateProfileSubToken(c *gin.Context) {
+	profile, ok := getProfileFromParam(c)
+	if !ok {
+		return
+	}
+
+	token := generateProfileSubToken(profile)
+	profile.SubToken = token
+	if err := DB.Save(&profile).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存 Token 失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Token 生成成功", "data": gin.H{"token": token, "profile": profileListItem(profile)}})
+}
+
+func mergeProfileRules(targetRules, sourceRules []CustomRule, targetProfileID uint) []CustomRule {
+	merged := make(map[string]CustomRule, len(targetRules)+len(sourceRules))
+	order := make([]string, 0, len(targetRules)+len(sourceRules))
+	addRule := func(rule CustomRule) {
+		key := rule.Type + "\x00" + rule.Payload
+		if _, exists := merged[key]; !exists {
+			order = append(order, key)
+		}
+		rule.ID = 0
+		rule.ProfileID = targetProfileID
+		merged[key] = rule
+	}
+	for _, rule := range targetRules {
+		addRule(rule)
+	}
+	for _, rule := range sourceRules {
+		addRule(rule)
+	}
+
+	result := make([]CustomRule, 0, len(order))
+	for _, key := range order {
+		result = append(result, merged[key])
+	}
+	return result
+}
+
+func handleCopyProfileRules(c *gin.Context) {
+	targetProfile, ok := getProfileFromParam(c)
+	if !ok {
+		return
+	}
+
+	var req copyProfileRulesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+	if req.SourceProfileID == targetProfile.ID {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "不能从当前配置复制规则"})
+		return
+	}
+
+	var sourceProfile SubscriptionProfile
+	if err := DB.First(&sourceProfile, req.SourceProfileID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "来源配置不存在"})
+		return
+	}
+
+	var sourceRules []CustomRule
+	var targetRules []CustomRule
+	if err := DB.Where("profile_id = ?", sourceProfile.ID).Find(&sourceRules).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取来源规则失败"})
+		return
+	}
+	if err := DB.Where("profile_id = ?", targetProfile.ID).Find(&targetRules).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取当前规则失败"})
+		return
+	}
+
+	mergedRules := mergeProfileRules(targetRules, sourceRules, targetProfile.ID)
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("profile_id = ?", targetProfile.ID).Delete(&CustomRule{}).Error; err != nil {
+			return err
+		}
+		if len(mergedRules) > 0 {
+			return tx.Create(&mergedRules).Error
+		}
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "复制规则失败", "error": err.Error()})
+		return
+	}
+
+	ReapplyRulesToProfile(targetProfile.ID)
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "规则复制成功", "data": gin.H{"copied": len(sourceRules), "total": len(mergedRules)}})
+}
+
 type BackupData struct {
-	Groups []CustomProxyGroup `json:"groups"`
-	Nodes  []CustomNode       `json:"nodes"`
-	Rules  []CustomRule       `json:"rules"`
+	Profiles []SubscriptionProfile `json:"profiles"`
+	Groups   []CustomProxyGroup    `json:"groups"`
+	Nodes    []CustomNode          `json:"nodes"`
+	Rules    []CustomRule          `json:"rules"`
 }
 
 func handleBackup(c *gin.Context) {
 	var data BackupData
+	if err := DB.Find(&data.Profiles).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取配置失败"})
+		return
+	}
 	if err := DB.Find(&data.Groups).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取策略组失败"})
 		return
@@ -482,15 +947,66 @@ func handleImport(c *gin.Context) {
 		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&CustomRule{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&SubscriptionProfile{}).Error; err != nil {
+			return err
+		}
+
+		defaultProfileID := uint(0)
+		profileIDMap := map[uint]uint{}
+		if len(data.Profiles) > 0 {
+			oldProfileIDs := make([]uint, len(data.Profiles))
+			for i := range data.Profiles {
+				oldProfileID := data.Profiles[i].ID
+				oldProfileIDs[i] = oldProfileID
+				data.Profiles[i].ID = 0
+				data.Profiles[i].SourceType = normalizeProfileSourceType(data.Profiles[i].SourceType)
+				data.Profiles[i].SubToken = strings.TrimSpace(data.Profiles[i].SubToken)
+				if data.Profiles[i].Name == "" {
+					data.Profiles[i].Name = fmt.Sprintf("导入配置 %d", i+1)
+				}
+			}
+			if err := tx.Create(&data.Profiles).Error; err != nil {
+				return err
+			}
+			defaultProfileID = data.Profiles[0].ID
+			for i := range data.Profiles {
+				profileIDMap[oldProfileIDs[i]] = data.Profiles[i].ID
+				profileIDMap[data.Profiles[i].ID] = data.Profiles[i].ID
+			}
+		} else {
+			profile := SubscriptionProfile{Name: "导入配置", SourceType: profileSourceLocal}
+			if err := tx.Create(&profile).Error; err != nil {
+				return err
+			}
+			defaultProfileID = profile.ID
+		}
 
 		for i := range data.Groups {
 			data.Groups[i].ID = 0
+			if mappedProfileID, ok := profileIDMap[data.Groups[i].ProfileID]; ok && mappedProfileID > 0 {
+				data.Groups[i].ProfileID = mappedProfileID
+			}
+			if data.Groups[i].ProfileID == 0 {
+				data.Groups[i].ProfileID = defaultProfileID
+			}
 		}
 		for i := range data.Nodes {
 			data.Nodes[i].ID = 0
+			if mappedProfileID, ok := profileIDMap[data.Nodes[i].ProfileID]; ok && mappedProfileID > 0 {
+				data.Nodes[i].ProfileID = mappedProfileID
+			}
+			if data.Nodes[i].ProfileID == 0 {
+				data.Nodes[i].ProfileID = defaultProfileID
+			}
 		}
 		for i := range data.Rules {
 			data.Rules[i].ID = 0
+			if mappedProfileID, ok := profileIDMap[data.Rules[i].ProfileID]; ok && mappedProfileID > 0 {
+				data.Rules[i].ProfileID = mappedProfileID
+			}
+			if data.Rules[i].ProfileID == 0 {
+				data.Rules[i].ProfileID = defaultProfileID
+			}
 		}
 
 		if len(data.Groups) > 0 {
@@ -516,7 +1032,7 @@ func handleImport(c *gin.Context) {
 		return
 	}
 
-	ReapplyRulesToLatestSubscription()
+	ReapplyRulesToAllProfiles()
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "备份导入成功，全部数据已覆盖"})
 }
 
@@ -532,124 +1048,84 @@ func handleDecode(c *gin.Context) {
 		return
 	}
 
-	targetURL := strings.TrimSpace(req.URL)
-
-	// 极致清洗 URL，只保留可见的合法 ASCII 字符，彻底消灭零宽空格 \u200b 等隐形杀手！
-	var cleanURL strings.Builder
-	for _, r := range targetURL {
-		if r > 32 && r < 127 {
-			cleanURL.WriteRune(r)
-		}
-	}
-	targetURL = cleanURL.String()
-
-	if targetURL == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "地址不能为空",
-		})
+	profileID, ok := resolveRequestProfileID(c, req.ProfileID)
+	if !ok {
 		return
 	}
 
-	// 自动补齐协议头（如果没有输入的话）
-	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
-		targetURL = "https://" + targetURL
+	targetURL, err := normalizeSubscriptionURL(req.URL)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
 	}
 
-	// 1. 发起请求获取远端配置内容 (可能是 Base64 也可能是明文 YAML)
-	rawResponse, err := fetchURLContent(targetURL)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{
-			"code":    502,
-			"message": "获取目标地址内容失败，请检查网络或地址是否正确",
+	var profile SubscriptionProfile
+	if err := DB.First(&profile, profileID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "配置不存在"})
+		return
+	}
+
+	profile.SourceType = profileSourceRemote
+	profile.URL = targetURL
+	profile.LocalContent = ""
+	if err := refreshProfileCache(&profile); err != nil {
+		statusCode := http.StatusBadGateway
+		if strings.Contains(err.Error(), "格式不支持") {
+			statusCode = http.StatusUnprocessableEntity
+		}
+		c.JSON(statusCode, gin.H{
+			"code":    statusCode,
+			"message": "获取或解析目标地址内容失败",
 			"error":   err.Error(),
 		})
 		return
 	}
 
-	// 2. 尝试对内容进行健壮的 Base64 解码，如果是纯文本 YAML 则自动回退接纳
-	var decodedContent string
-	decoded, err := decodeAdaptiveBase64(rawResponse)
-	if err != nil {
-		// 也许它本身就是明文的配置文件 (如 YAML)? 我们判断一下有没有常见的配置特征 (KISS 原则: 灵活兼容)
-		if strings.Contains(rawResponse, "proxies:") || strings.Contains(rawResponse, "outbounds:") || strings.Contains(rawResponse, "servers:") {
-			decodedContent = rawResponse
-		} else {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{
-				"code":    422,
-				"message": "解析失败，且不包含常见配置文件特征，目标地址返回的内容格式不支持",
-				"error":   err.Error(),
-				"preview": truncateString(rawResponse, 200), // 提供前200个字符用于排错
-			})
-			return
-		}
-	} else {
-		decodedContent = decoded
-	}
-
-	// 智能明文转换：由于很多节点配置（如 vmess://, hysteria2://）为了防乱码会把节点名称进行 URL 编码（如 %E5%89...），
-	// 这里我们对每一行进行 URL 解析，让前端拿到最纯净、最直观的明文。
-	lines := strings.Split(decodedContent, "\n")
-	for i, line := range lines {
-		// 为了防止把原本合法的 + 错误转为空格，这里使用更稳妥的局部替换策略。
-		// 大多数节点编码都集中在节点名 # 后面，也可以直接整体 unquote
-		if unescaped, err := url.PathUnescape(strings.TrimSpace(line)); err == nil {
-			lines[i] = unescaped
-		}
-	}
-	decodedContent = strings.Join(lines, "\n")
-
-	// 🌟 AST 无损注入逻辑：自动将数据库中的自定义节点注入到 proxies 中
-	decodedContent = injectCustomNodes(decodedContent)
-
-	// 🌟 AST 无损注入逻辑：自动将数据库中的自定义组注入到配置的 proxy-groups 中
-	decodedContent = injectCustomGroups(decodedContent)
-
-	// 🌟 AST 无损智能覆盖逻辑：自动将自定义分流规则优先注入并实现订阅规则覆盖去重
-	decodedContent = injectCustomRules(decodedContent)
-
-	// 保存至数据库 Subscription 表
 	var sub Subscription
 	if err := DB.Where("url = ?", targetURL).First(&sub).Error; err != nil {
 		sub = Subscription{URL: targetURL}
 	}
-	sub.RawResponse = rawResponse
-	sub.Decoded = decodedContent
+	sub.RawResponse = profile.RawResponse
+	sub.Decoded = profile.Decoded
 	DB.Save(&sub)
 
-	// 3. 成功返回
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "success",
-		"data": DecodeResponse{
-			URL:         targetURL,
-			RawResponse: truncateString(rawResponse, 1000), // 限制原始响应返回长度，避免传输体过大
-			Decoded:     decodedContent,
-		},
+		"data":    decodeResponseFromProfile(profile),
 	})
 }
 
-// handleGetSubscription 获取最新保存的订阅配置
+// handleGetSubscription 获取当前配置保存的订阅配置
 func handleGetSubscription(c *gin.Context) {
-	var sub Subscription
-	if err := DB.Order("updated_at desc").First(&sub).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "暂无保存的订阅"})
+	profileID, ok := resolveRequestProfileID(c, 0)
+	if !ok {
+		return
+	}
+
+	var profile SubscriptionProfile
+	if err := DB.First(&profile, profileID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "配置不存在"})
+		return
+	}
+	if profile.Decoded == "" {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "当前配置暂无缓存，请先刷新配置"})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code": 200,
-		"data": DecodeResponse{
-			URL:         sub.URL,
-			RawResponse: truncateString(sub.RawResponse, 1000),
-			Decoded:     sub.Decoded,
-		},
+		"data": decodeResponseFromProfile(profile),
 	})
 }
 
 // handleGetCustomGroups 获取所有自定义策略组
 func handleGetCustomGroups(c *gin.Context) {
-	groups, err := GetCustomProxyGroups()
+	profileID, ok := resolveRequestProfileID(c, 0)
+	if !ok {
+		return
+	}
+	groups, err := GetCustomProxyGroups(profileID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取失败"})
 		return
@@ -660,28 +1136,34 @@ func handleGetCustomGroups(c *gin.Context) {
 // handleCreateCustomGroup 创建新策略组
 func handleCreateCustomGroup(c *gin.Context) {
 	var req struct {
-		Name    string   `json:"name"`
-		Type    string   `json:"type"`
-		Proxies []string `json:"proxies"`
-		Exclude string   `json:"exclude"`
+		ProfileID uint     `json:"profile_id"`
+		Name      string   `json:"name"`
+		Type      string   `json:"type"`
+		Proxies   []string `json:"proxies"`
+		Exclude   string   `json:"exclude"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
 		return
 	}
+	profileID, ok := resolveRequestProfileID(c, req.ProfileID)
+	if !ok {
+		return
+	}
 
 	proxiesBytes, _ := json.Marshal(req.Proxies)
 	group := CustomProxyGroup{
-		Name:    req.Name,
-		Type:    req.Type,
-		Proxies: string(proxiesBytes),
-		Exclude: req.Exclude,
+		ProfileID: profileID,
+		Name:      req.Name,
+		Type:      req.Type,
+		Proxies:   string(proxiesBytes),
+		Exclude:   req.Exclude,
 	}
 	if err := DB.Create(&group).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存失败", "error": err.Error()})
 		return
 	}
-	ReapplyRulesToLatestSubscription()
+	ReapplyRulesToProfile(profileID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "保存成功", "data": group})
 }
 
@@ -715,18 +1197,23 @@ func handleUpdateCustomGroup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新失败", "error": err.Error()})
 		return
 	}
-	ReapplyRulesToLatestSubscription()
+	ReapplyRulesToProfile(group.ProfileID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "更新成功", "data": group})
 }
 
 // handleDeleteCustomGroup 删除自定义组
 func handleDeleteCustomGroup(c *gin.Context) {
 	id := c.Param("id")
-	if err := DB.Delete(&CustomProxyGroup{}, id).Error; err != nil {
+	var group CustomProxyGroup
+	if err := DB.First(&group, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "代理组不存在"})
+		return
+	}
+	if err := DB.Delete(&group).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除失败", "error": err.Error()})
 		return
 	}
-	ReapplyRulesToLatestSubscription()
+	ReapplyRulesToProfile(group.ProfileID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功"})
 }
 
@@ -751,7 +1238,11 @@ func handleParseLink(c *gin.Context) {
 
 // handleGetCustomNodes 获取所有自定义节点
 func handleGetCustomNodes(c *gin.Context) {
-	nodes, err := GetCustomNodes()
+	profileID, ok := resolveRequestProfileID(c, 0)
+	if !ok {
+		return
+	}
+	nodes, err := GetCustomNodes(profileID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取失败"})
 		return
@@ -762,41 +1253,52 @@ func handleGetCustomNodes(c *gin.Context) {
 // handleCreateCustomNode 创建或保存自定义节点
 func handleCreateCustomNode(c *gin.Context) {
 	var req struct {
-		Name   string                 `json:"name"`
-		Type   string                 `json:"type"`
-		Server string                 `json:"server"`
-		Port   int                    `json:"port"`
-		Config map[string]interface{} `json:"config"`
+		ProfileID uint                   `json:"profile_id"`
+		Name      string                 `json:"name"`
+		Type      string                 `json:"type"`
+		Server    string                 `json:"server"`
+		Port      int                    `json:"port"`
+		Config    map[string]interface{} `json:"config"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
 		return
 	}
+	profileID, ok := resolveRequestProfileID(c, req.ProfileID)
+	if !ok {
+		return
+	}
 
 	configBytes, _ := json.Marshal(req.Config)
 	node := CustomNode{
-		Name:   req.Name,
-		Type:   req.Type,
-		Server: req.Server,
-		Port:   req.Port,
-		Config: string(configBytes),
+		ProfileID: profileID,
+		Name:      req.Name,
+		Type:      req.Type,
+		Server:    req.Server,
+		Port:      req.Port,
+		Config:    string(configBytes),
 	}
 	if err := DB.Create(&node).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存失败", "error": err.Error()})
 		return
 	}
-	ReapplyRulesToLatestSubscription()
+	ReapplyRulesToProfile(profileID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "保存成功", "data": node})
 }
 
 // handleDeleteCustomNode 删除自定义节点
 func handleDeleteCustomNode(c *gin.Context) {
 	id := c.Param("id")
-	if err := DB.Delete(&CustomNode{}, id).Error; err != nil {
+	var node CustomNode
+	if err := DB.First(&node, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "节点不存在"})
+		return
+	}
+	if err := DB.Delete(&node).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除失败", "error": err.Error()})
 		return
 	}
-	ReapplyRulesToLatestSubscription()
+	ReapplyRulesToProfile(node.ProfileID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功"})
 }
 
@@ -832,13 +1334,17 @@ func handleUpdateCustomNode(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新失败", "error": err.Error()})
 		return
 	}
-	ReapplyRulesToLatestSubscription()
+	ReapplyRulesToProfile(node.ProfileID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "更新成功", "data": node})
 }
 
 // handleGetCustomRules 获取所有自定义规则
 func handleGetCustomRules(c *gin.Context) {
-	rules, err := GetCustomRules()
+	profileID, ok := resolveRequestProfileID(c, 0)
+	if !ok {
+		return
+	}
+	rules, err := GetCustomRules(profileID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取失败"})
 		return
@@ -849,39 +1355,45 @@ func handleGetCustomRules(c *gin.Context) {
 // handleCreateCustomRule 创建或保存自定义规则 (支持按 Type 和 Payload 进行 Upsert 智能覆盖)
 func handleCreateCustomRule(c *gin.Context) {
 	var req struct {
-		Type    string `json:"type" binding:"required"`
-		Payload string `json:"payload" binding:"required"`
-		Target  string `json:"target" binding:"required"`
+		ProfileID uint   `json:"profile_id"`
+		Type      string `json:"type" binding:"required"`
+		Payload   string `json:"payload" binding:"required"`
+		Target    string `json:"target" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
 		return
 	}
+	profileID, ok := resolveRequestProfileID(c, req.ProfileID)
+	if !ok {
+		return
+	}
 
 	var existingRule CustomRule
-	if err := DB.Where("type = ? AND payload = ?", req.Type, req.Payload).First(&existingRule).Error; err == nil {
+	if err := DB.Where("profile_id = ? AND type = ? AND payload = ?", profileID, req.Type, req.Payload).First(&existingRule).Error; err == nil {
 		// 已存在相同的拦截条件，执行覆盖更新
 		existingRule.Target = req.Target
 		if err := DB.Save(&existingRule).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "覆盖更新失败", "error": err.Error()})
 			return
 		}
-		ReapplyRulesToLatestSubscription()
+		ReapplyRulesToProfile(profileID)
 		c.JSON(http.StatusOK, gin.H{"code": 200, "message": "规则已覆盖更新", "data": existingRule})
 		return
 	}
 
 	// 不存在，创建新规则
 	rule := CustomRule{
-		Type:    req.Type,
-		Payload: req.Payload,
-		Target:  req.Target,
+		ProfileID: profileID,
+		Type:      req.Type,
+		Payload:   req.Payload,
+		Target:    req.Target,
 	}
 	if err := DB.Create(&rule).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存失败", "error": err.Error()})
 		return
 	}
-	ReapplyRulesToLatestSubscription()
+	ReapplyRulesToProfile(profileID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "保存成功", "data": rule})
 }
 
@@ -912,23 +1424,28 @@ func handleUpdateCustomRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新失败", "error": err.Error()})
 		return
 	}
-	ReapplyRulesToLatestSubscription()
+	ReapplyRulesToProfile(rule.ProfileID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "更新成功", "data": rule})
 }
 
 // handleDeleteCustomRule 删除自定义规则
 func handleDeleteCustomRule(c *gin.Context) {
 	id := c.Param("id")
-	if err := DB.Delete(&CustomRule{}, id).Error; err != nil {
+	var rule CustomRule
+	if err := DB.First(&rule, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "规则不存在"})
+		return
+	}
+	if err := DB.Delete(&rule).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除失败", "error": err.Error()})
 		return
 	}
-	ReapplyRulesToLatestSubscription()
+	ReapplyRulesToProfile(rule.ProfileID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功"})
 }
 
 // injectCustomNodes 基于 yaml.v3 的 Node 树完成自定义节点的注入
-func injectCustomNodes(yamlContent string) string {
+func injectCustomNodes(yamlContent string, profileID uint) string {
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(yamlContent), &root); err != nil {
 		log.Printf("YAML unmarshal warning in injectCustomNodes: %v", err)
@@ -967,7 +1484,7 @@ func injectCustomNodes(yamlContent string) string {
 	}
 
 	// 获取数据库里的自定义节点并无损注入
-	customNodes, _ := GetCustomNodes()
+	customNodes, _ := GetCustomNodes(profileID)
 	for _, cn := range customNodes {
 		var configMap map[string]interface{}
 		if err := json.Unmarshal([]byte(cn.Config), &configMap); err != nil {
@@ -1025,7 +1542,7 @@ func injectCustomNodes(yamlContent string) string {
 }
 
 // injectCustomGroups 基于 yaml.v3 的 Node 树完成零注释丢失的无损注入
-func injectCustomGroups(yamlContent string) string {
+func injectCustomGroups(yamlContent string, profileID uint) string {
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(yamlContent), &root); err != nil {
 		log.Printf("YAML unmarshal warning: %v", err)
@@ -1077,7 +1594,7 @@ func injectCustomGroups(yamlContent string) string {
 	}
 
 	// 获取数据库里的自定义组并无损注入
-	customGroups, _ := GetCustomProxyGroups()
+	customGroups, _ := GetCustomProxyGroups(profileID)
 	for _, cg := range customGroups {
 		proxiesList := cg.GetProxiesList()
 
@@ -1138,7 +1655,7 @@ func injectCustomGroups(yamlContent string) string {
 }
 
 // injectCustomRules 基于 yaml.v3 Node 树完成分流规则的强力接管、前置注入与原生去重
-func injectCustomRules(yamlContent string) string {
+func injectCustomRules(yamlContent string, profileID uint) string {
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(yamlContent), &root); err != nil {
 		log.Printf("YAML unmarshal warning in injectCustomRules: %v", err)
@@ -1174,7 +1691,7 @@ func injectCustomRules(yamlContent string) string {
 	}
 
 	// 1. 获取所有自定义规则并建立指纹映射，用于后续原生规则的去重剥离
-	customRules, _ := GetCustomRules()
+	customRules, _ := GetCustomRules(profileID)
 	customFingerprints := make(map[string]bool)
 	var customRuleNodes []*yaml.Node
 
@@ -1519,11 +2036,11 @@ func autoPruneDialerProxyLoops(proxiesNode, proxyGroupsNode *yaml.Node) {
 }
 
 // ProcessSubscriptionRawData 集中处理订阅的解码、明文转换及各种自定义规则的注入 (DRY 原则)
-func ProcessSubscriptionRawData(rawResponse string) (string, error) {
+func ProcessSubscriptionRawData(rawResponse string, profileID uint) (string, error) {
 	var decodedContent string
 	decoded, err := decodeAdaptiveBase64(rawResponse)
 	if err != nil {
-		if strings.Contains(rawResponse, "proxies:") || strings.Contains(rawResponse, "outbounds:") || strings.Contains(rawResponse, "servers:") {
+		if looksLikePlainSubscriptionConfig(rawResponse) {
 			decodedContent = rawResponse
 		} else {
 			return "", fmt.Errorf("解析失败，且不包含常见配置文件特征，目标地址返回的内容格式不支持: %v", err)
@@ -1540,49 +2057,61 @@ func ProcessSubscriptionRawData(rawResponse string) (string, error) {
 	}
 	decodedContent = strings.Join(lines, "\n")
 
-	decodedContent = injectCustomNodes(decodedContent)
-	decodedContent = injectCustomGroups(decodedContent)
-	decodedContent = injectCustomRules(decodedContent)
+	decodedContent = injectCustomNodes(decodedContent, profileID)
+	decodedContent = injectCustomGroups(decodedContent, profileID)
+	decodedContent = injectCustomRules(decodedContent, profileID)
 
 	return decodedContent, nil
 }
 
-// ReapplyRulesToLatestSubscription 获取最新订阅并重新应用所有规则
-func ReapplyRulesToLatestSubscription() {
-	var sub Subscription
-	if err := DB.Order("updated_at desc").First(&sub).Error; err != nil {
+// ReapplyRulesToProfile 对指定配置缓存重新应用自定义节点、策略组和规则。
+func ReapplyRulesToProfile(profileID uint) {
+	var profile SubscriptionProfile
+	if err := DB.First(&profile, profileID).Error; err != nil {
 		return
 	}
-	if sub.RawResponse == "" {
+	rawContent := profile.RawResponse
+	if profile.SourceType == profileSourceLocal {
+		rawContent = profile.LocalContent
+	}
+	if strings.TrimSpace(rawContent) == "" {
 		return
 	}
-	if decodedContent, err := ProcessSubscriptionRawData(sub.RawResponse); err == nil {
-		sub.Decoded = decodedContent
-		DB.Save(&sub)
+	if decodedContent, err := ProcessSubscriptionRawData(rawContent, profile.ID); err == nil {
+		profile.Decoded = decodedContent
+		if profile.SourceType == profileSourceLocal {
+			profile.RawResponse = profile.LocalContent
+		}
+		DB.Save(&profile)
+	}
+}
+
+func ReapplyRulesToAllProfiles() {
+	var profiles []SubscriptionProfile
+	if err := DB.Find(&profiles).Error; err != nil {
+		return
+	}
+	for _, profile := range profiles {
+		ReapplyRulesToProfile(profile.ID)
 	}
 }
 
 // handleGetSubToken 获取当前有效的订阅 Token，不创建新 Token
 func handleGetSubToken(c *gin.Context) {
-	username, exists := c.Get("username")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
+	profile, err := getDefaultProfile()
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "暂无可用配置，请先创建配置"})
 		return
 	}
 
-	var user User
-	if err := DB.Where("username = ?", username).First(&user).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "用户不存在"})
-		return
-	}
-
-	hasToken := user.SubToken != ""
+	hasToken := profile.SubToken != ""
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "获取成功",
 		"data": gin.H{
-			"token":     user.SubToken,
+			"token":     profile.SubToken,
 			"has_token": hasToken,
+			"profile":   profileListItem(profile),
 		},
 	})
 }
@@ -1601,16 +2130,25 @@ func handleGenerateSubToken(c *gin.Context) {
 		return
 	}
 
-	rawToken := fmt.Sprintf("%s|%d|%s", user.Username, time.Now().Unix(), uuid.New().String())
-	token := base64.URLEncoding.EncodeToString([]byte(rawToken))
+	profile, err := getDefaultProfile()
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "暂无可用配置，请先创建配置"})
+		return
+	}
 
+	token := generateProfileSubToken(profile)
+	profile.SubToken = token
 	user.SubToken = token
+	if err := DB.Save(&profile).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存配置 Token 失败"})
+		return
+	}
 	if err := DB.Save(&user).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存 Token 失败"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Token 生成成功", "data": gin.H{"token": token}})
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Token 生成成功", "data": gin.H{"token": token, "profile": profileListItem(profile)}})
 }
 
 // handleFinalSubscription 最终订阅地址接口
@@ -1658,8 +2196,7 @@ func handleShadowrocketInstall(c *gin.Context) {
 		return
 	}
 
-	var user User
-	if err := DB.Where("sub_token = ?", token).First(&user).Error; err != nil {
+	if _, err := findProfileBySubToken(token); err != nil {
 		c.String(http.StatusUnauthorized, "Invalid or expired token")
 		return
 	}
@@ -1742,55 +2279,36 @@ func serveSubscriptionByFormat(c *gin.Context, format string) {
 	serveSubscriptionByToken(c, format, token)
 }
 
-func serveSubscriptionByToken(c *gin.Context, format string, token string) {
+func findProfileBySubToken(token string) (SubscriptionProfile, error) {
+	var profile SubscriptionProfile
+	if err := DB.Where("sub_token = ?", token).First(&profile).Error; err == nil {
+		return profile, nil
+	}
+
 	var user User
 	if err := DB.Where("sub_token = ?", token).First(&user).Error; err != nil {
+		return SubscriptionProfile{}, err
+	}
+	return getDefaultProfile()
+}
+
+func serveSubscriptionByToken(c *gin.Context, format string, token string) {
+	profile, err := findProfileBySubToken(token)
+	if err != nil {
 		c.String(http.StatusUnauthorized, "Invalid or expired token")
 		return
 	}
 
-	var sub Subscription
-	if err := DB.Order("updated_at desc").First(&sub).Error; err != nil {
-		c.String(http.StatusNotFound, "No subscription found in database")
-		return
-	}
-
-	targetURL := sub.URL
-	if targetURL == "" {
-		c.String(http.StatusBadRequest, "Subscription URL is empty")
-		return
-	}
-
-	// 1. 尝试从上游拉取最新响应
-	rawResponse, err := fetchURLContent(targetURL)
-	if err != nil {
-		// 容错降级返回缓存
-		if sub.Decoded != "" {
-			serveFinalSubscription(c, format, sub.Decoded)
+	if err := refreshProfileCache(&profile); err != nil {
+		if profile.Decoded != "" {
+			serveFinalSubscription(c, format, profile.Decoded)
 			return
 		}
-		c.String(http.StatusBadGateway, "Failed to fetch original subscription: "+err.Error())
+		c.String(http.StatusBadGateway, "Failed to build subscription: "+err.Error())
 		return
 	}
 
-	// 2. 解码、清洗并注入自定义配置
-	decodedContent, err := ProcessSubscriptionRawData(rawResponse)
-	if err != nil {
-		if sub.Decoded != "" {
-			serveFinalSubscription(c, format, sub.Decoded)
-			return
-		}
-		c.String(http.StatusUnprocessableEntity, "Unsupported format: "+err.Error())
-		return
-	}
-
-	// 3. 更新缓存
-	sub.RawResponse = rawResponse
-	sub.Decoded = decodedContent
-	DB.Save(&sub)
-
-	// 4. 按客户端格式返回订阅内容
-	serveFinalSubscription(c, format, decodedContent)
+	serveFinalSubscription(c, format, profile.Decoded)
 }
 
 func serveFinalSubscription(c *gin.Context, format string, clashYAML string) {

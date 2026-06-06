@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Link, Edit, Delete, Loading, ArrowDown } from "@element-plus/icons-vue";
 import axios from "axios";
@@ -49,6 +49,41 @@ const hasSubscription = ref(false);
 const result = ref<{ url: string; raw_response: string; decoded: string } | null>(
   null,
 );
+
+interface SubscriptionProfile {
+  id: number;
+  name: string;
+  source_type: "remote" | "local";
+  url: string;
+  local_content: string;
+  has_token: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+const profiles = ref<SubscriptionProfile[]>([]);
+const activeProfileId = ref<number | null>(null);
+const isProfilesLoading = ref(false);
+const profileDialogVisible = ref(false);
+const isSubmittingProfile = ref(false);
+const editingProfileId = ref<number | null>(null);
+const profileForm = ref({
+  name: "",
+  source_type: "remote" as "remote" | "local",
+  url: "",
+  local_content: "",
+});
+
+const currentProfile = computed(() =>
+  profiles.value.find((profile) => profile.id === activeProfileId.value) || null,
+);
+
+const currentProfileName = computed(() => currentProfile.value?.name || "当前配置");
+const profileScopedUrl = (path: string) => {
+  if (!activeProfileId.value) return buildBackendUrl(path);
+  const separator = path.includes("?") ? "&" : "?";
+  return buildBackendUrl(`${path}${separator}profile_id=${activeProfileId.value}`);
+};
 
 // 最终订阅生成状态
 const isCopyingSubLink = ref(false);
@@ -112,9 +147,13 @@ const installShadowrocketConfig = () => {
 };
 
 const copyCurrentSubLink = async () => {
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
   isCopyingSubLink.value = true;
   try {
-    const res = await axios.get(buildBackendUrl("/api/sub-token"));
+    const res = await axios.get(buildBackendUrl(`/api/profiles/${activeProfileId.value}/sub-token`));
     if (res.data.code !== 200) {
       ElMessage.error(res.data.message || "获取订阅地址失败");
       return;
@@ -127,7 +166,7 @@ const copyCurrentSubLink = async () => {
     }
 
     setFinalSubLinks(data.token);
-    subLinkDialogTitle.value = "复制订阅地址";
+    subLinkDialogTitle.value = `复制订阅地址 - ${currentProfileName.value}`;
     showRegeneratedWarning.value = false;
     subLinkDialogVisible.value = true;
   } catch (err: any) {
@@ -139,9 +178,13 @@ const copyCurrentSubLink = async () => {
 };
 
 const regenerateSubLink = async () => {
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
   try {
     await ElMessageBox.confirm(
-      "重新生成订阅会覆盖旧 token，旧订阅地址将立即失效。是否继续？",
+      `重新生成「${currentProfileName.value}」的订阅会覆盖该配置旧 token，旧订阅地址将立即失效。是否继续？`,
       "重新生成订阅确认",
       {
         confirmButtonText: "确认重新生成",
@@ -156,10 +199,10 @@ const regenerateSubLink = async () => {
 
   isGeneratingSubLink.value = true;
   try {
-    const res = await axios.post(buildBackendUrl("/api/generate-sub-token"));
+    const res = await axios.post(buildBackendUrl(`/api/profiles/${activeProfileId.value}/generate-sub-token`));
     if (res.data.code === 200) {
       setFinalSubLinks(res.data.data.token);
-      subLinkDialogTitle.value = "订阅地址已重新生成";
+      subLinkDialogTitle.value = `订阅地址已重新生成 - ${currentProfileName.value}`;
       showRegeneratedWarning.value = true;
       subLinkDialogVisible.value = true;
     } else {
@@ -173,9 +216,40 @@ const regenerateSubLink = async () => {
   }
 };
 
-const loadSubscription = async () => {
+const loadProfiles = async (preferredProfileId?: number) => {
+  isProfilesLoading.value = true;
   try {
-    const res = await axios.get(buildBackendUrl("/api/subscription"));
+    const res = await axios.get(buildBackendUrl("/api/profiles"));
+    if (res.data.code === 200) {
+      profiles.value = res.data.data || [];
+      const savedProfileId = Number(localStorage.getItem("active_profile_id") || 0);
+      const nextProfile =
+        profiles.value.find((profile) => profile.id === preferredProfileId) ||
+        profiles.value.find((profile) => profile.id === savedProfileId) ||
+        profiles.value[0] ||
+        null;
+      activeProfileId.value = nextProfile?.id || null;
+      if (activeProfileId.value) {
+        localStorage.setItem("active_profile_id", String(activeProfileId.value));
+        inputUrl.value = nextProfile?.url || "";
+      }
+    }
+  } catch (err: any) {
+    console.error(err);
+    ElMessage.error(err.response?.data?.message || "获取配置列表失败");
+  } finally {
+    isProfilesLoading.value = false;
+  }
+};
+
+const loadSubscription = async () => {
+  if (!activeProfileId.value) {
+    result.value = null;
+    hasSubscription.value = false;
+    return;
+  }
+  try {
+    const res = await axios.get(buildBackendUrl(`/api/profiles/${activeProfileId.value}/subscription`));
     if (res.data.code === 200 && res.data.data) {
       inputUrl.value = res.data.data.url;
       result.value = res.data.data;
@@ -186,8 +260,135 @@ const loadSubscription = async () => {
         activeTab.value = "text";
       }
     }
-  } catch (e) {
-    // 暂无保存的订阅，正常跳过
+  } catch (e: any) {
+    result.value = null;
+    hasSubscription.value = false;
+    inputUrl.value = currentProfile.value?.url || "";
+  }
+};
+
+const selectProfile = async (profile: SubscriptionProfile) => {
+  if (activeProfileId.value === profile.id) return;
+  activeProfileId.value = profile.id;
+  localStorage.setItem("active_profile_id", String(profile.id));
+  inputUrl.value = profile.url || "";
+  errorMsg.value = "";
+  dirtyRulesMap.value = {};
+  await fetchCustomData();
+  await loadSubscription();
+};
+
+const openCreateProfileDialog = () => {
+  editingProfileId.value = null;
+  profileForm.value = {
+    name: "",
+    source_type: "remote",
+    url: "",
+    local_content: "",
+  };
+  profileDialogVisible.value = true;
+};
+
+const openEditProfileDialog = (profile: SubscriptionProfile) => {
+  editingProfileId.value = profile.id;
+  profileForm.value = {
+    name: profile.name,
+    source_type: profile.source_type,
+    url: profile.url || "",
+    local_content: profile.local_content || "",
+  };
+  profileDialogVisible.value = true;
+};
+
+const saveProfile = async () => {
+  if (!profileForm.value.name.trim()) {
+    ElMessage.warning("请输入配置名称");
+    return;
+  }
+  if (profileForm.value.source_type === "remote" && !profileForm.value.url.trim()) {
+    ElMessage.warning("请输入远程订阅地址");
+    return;
+  }
+  if (profileForm.value.source_type === "local" && !profileForm.value.local_content.trim()) {
+    ElMessage.warning("请输入本地 YAML 配置内容");
+    return;
+  }
+
+  isSubmittingProfile.value = true;
+  try {
+    const payload = { ...profileForm.value };
+    const res = editingProfileId.value
+      ? await axios.put(buildBackendUrl(`/api/profiles/${editingProfileId.value}`), payload)
+      : await axios.post(buildBackendUrl("/api/profiles"), payload);
+    if (res.data.code === 200) {
+      const profileId = res.data.data?.id || editingProfileId.value;
+      ElMessage.success(editingProfileId.value ? "配置更新成功" : "配置创建成功");
+      profileDialogVisible.value = false;
+      await loadProfiles(profileId);
+      await fetchCustomData();
+      await loadSubscription();
+    } else {
+      ElMessage.error(res.data.message || "保存配置失败");
+    }
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.message || "保存配置失败");
+  } finally {
+    isSubmittingProfile.value = false;
+  }
+};
+
+const deleteProfile = async (profile: SubscriptionProfile) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除配置「${profile.name}」吗？该配置下的自定义节点、策略组和规则也会删除。`,
+      "删除配置确认",
+      {
+        confirmButtonText: "确认删除",
+        cancelButtonText: "取消",
+        type: "warning",
+      },
+    );
+  } catch {
+    return;
+  }
+
+  try {
+    const res = await axios.delete(buildBackendUrl(`/api/profiles/${profile.id}`));
+    if (res.data.code === 200) {
+      ElMessage.success("配置已删除");
+      await loadProfiles();
+      await fetchCustomData();
+      await loadSubscription();
+    }
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.message || "删除配置失败");
+  }
+};
+
+const refreshCurrentProfile = async () => {
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
+  isLoading.value = true;
+  errorMsg.value = "";
+  try {
+    const res = await axios.post(buildBackendUrl(`/api/profiles/${activeProfileId.value}/refresh`));
+    if (res.data.code === 200) {
+      result.value = res.data.data;
+      hasSubscription.value = true;
+      inputUrl.value = res.data.data.url || "";
+      await loadProfiles(activeProfileId.value);
+      await fetchCustomData();
+      ElMessage.success("当前配置已刷新");
+      activeTab.value = parsedNodes.value.length > 0 ? "nodes" : "text";
+    }
+  } catch (err: any) {
+    const msg = err.response?.data?.error || err.response?.data?.message || "刷新配置失败";
+    errorMsg.value = msg;
+    ElMessage.error("刷新配置失败");
+  } finally {
+    isLoading.value = false;
   }
 };
 
@@ -197,11 +398,17 @@ const customGroupsDict = ref<Record<string, any>>({});
 const customRulesDict = ref<Record<string, any>>({});
 
 const fetchCustomData = async () => {
+  if (!activeProfileId.value) {
+    customNodesDict.value = {};
+    customGroupsDict.value = {};
+    customRulesDict.value = {};
+    return;
+  }
   try {
     const [nodesRes, groupsRes, rulesRes] = await Promise.all([
-      axios.get(buildBackendUrl("/api/custom-nodes")),
-      axios.get(buildBackendUrl("/api/custom-groups")),
-      axios.get(buildBackendUrl("/api/custom-rules")),
+      axios.get(profileScopedUrl("/api/custom-nodes")),
+      axios.get(profileScopedUrl("/api/custom-groups")),
+      axios.get(profileScopedUrl("/api/custom-rules")),
     ]);
     const nDict: Record<string, any> = {};
     if (nodesRes.data.code === 200) {
@@ -236,6 +443,7 @@ const fetchCustomData = async () => {
 const loadInitialAppData = async () => {
   isInitialDataLoading.value = true;
   try {
+    await loadProfiles();
     await fetchCustomData();
     await loadSubscription();
   } finally {
@@ -274,6 +482,10 @@ interface ProxyNode {
 
 // 快速填入 Mock 地址
 const handleQuickMock = () => {
+  if (currentProfile.value?.source_type === "local") {
+    ElMessage.warning("本地配置不需要订阅地址，请编辑 YAML 内容");
+    return;
+  }
   inputUrl.value = "mock.clash.local/sub";
   handleDecode();
 };
@@ -287,6 +499,14 @@ const handleClear = () => {
 
 // 解析并获取 Base64 内容
 const handleDecode = async () => {
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先创建或选择一个配置");
+    return;
+  }
+  if (currentProfile.value?.source_type === "local") {
+    await refreshCurrentProfile();
+    return;
+  }
   const url = inputUrl.value.trim();
   if (!url) {
     ElMessage.warning("请输入订阅或配置地址");
@@ -300,10 +520,12 @@ const handleDecode = async () => {
   try {
     const response = await axios.post(buildBackendUrl("/api/decode"), {
       url,
+      profile_id: activeProfileId.value,
     });
     if (response.data && response.data.code === 200) {
       result.value = response.data.data;
       hasSubscription.value = true;
+      await loadProfiles(activeProfileId.value);
       await fetchCustomData();
       ElMessage.success("成功拉取并完成 Base64 解码！");
       // 如果解析出来的节点数大于0，默认跳到 nodes 页签，否则跳到 text
@@ -383,7 +605,6 @@ const currentRulePage = ref(1);
 const rulePageSize = ref(100);
 
 // 监听搜索词或筛选变化，重置页码
-import { watch } from "vue";
 watch([ruleSearchQuery, ruleTargetFilter], () => {
   currentRulePage.value = 1;
 });
@@ -576,7 +797,7 @@ const deleteCustomGroup = (groupName: string) => {
         if (res.data.code === 200) {
           ElMessage.success("自定义策略组已成功删除！");
           await fetchCustomData();
-          if (inputUrl.value) {
+          if (activeProfileId.value) {
             await loadSubscription();
           }
         }
@@ -611,19 +832,24 @@ const saveCustomGroup = async () => {
     ElMessage.warning("请至少选择一个代理或节点");
     return;
   }
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
 
   isSubmittingGroup.value = true;
   try {
     let res;
+    const payload = { ...newGroupForm.value, profile_id: activeProfileId.value };
     if (editingGroupId.value) {
       res = await axios.put(
         buildBackendUrl(`/api/custom-groups/${editingGroupId.value}`),
-        newGroupForm.value,
+        payload,
       );
     } else {
       res = await axios.post(
         buildBackendUrl("/api/custom-groups"),
-        newGroupForm.value,
+        payload,
       );
     }
     if (res.data.code === 200) {
@@ -634,7 +860,7 @@ const saveCustomGroup = async () => {
       );
       groupDialogVisible.value = false;
       await fetchCustomData();
-      if (inputUrl.value) {
+      if (activeProfileId.value) {
         await loadSubscription();
       }
     } else {
@@ -734,7 +960,7 @@ const deleteCustomNode = (nodeName: string) => {
         if (res.data.code === 200) {
           ElMessage.success("自定义节点已被彻底删除！");
           await fetchCustomData();
-          if (inputUrl.value) {
+          if (activeProfileId.value) {
             await loadSubscription();
           }
         }
@@ -785,6 +1011,10 @@ const saveCustomNode = async () => {
     ElMessage.warning("请补全基础信息（名称、服务器、端口）");
     return;
   }
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
   isSubmittingNode.value = true;
 
   // 同步基础信息到 config
@@ -795,15 +1025,16 @@ const saveCustomNode = async () => {
 
   try {
     let res;
+    const payload = { ...newNodeForm.value, profile_id: activeProfileId.value };
     if (editingNodeId.value) {
       res = await axios.put(
         buildBackendUrl(`/api/custom-nodes/${editingNodeId.value}`),
-        newNodeForm.value,
+        payload,
       );
     } else {
       res = await axios.post(
         buildBackendUrl("/api/custom-nodes"),
-        newNodeForm.value,
+        payload,
       );
     }
     if (res.data.code === 200) {
@@ -814,7 +1045,7 @@ const saveCustomNode = async () => {
       );
       nodeDialogVisible.value = false;
       await fetchCustomData();
-      if (inputUrl.value) {
+      if (activeProfileId.value) {
         await loadSubscription();
       }
     } else {
@@ -839,6 +1070,10 @@ const markRuleDirty = (row: any) => {
 
 const batchSaveRules = async () => {
   if (!hasDirtyRules.value) return;
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
   isSubmittingRule.value = true;
   
   try {
@@ -846,6 +1081,7 @@ const batchSaveRules = async () => {
       let key = row.payload === "-" ? row.type : `${row.type},${row.payload}`;
       let customInfo = customRulesDict.value[key];
       let submitData = {
+        profile_id: activeProfileId.value,
         type: row.type,
         payload: row.payload === "-" ? "-" : row.payload,
         target: row.target,
@@ -861,7 +1097,7 @@ const batchSaveRules = async () => {
     ElMessage.success(`成功批量接管 ${promises.length} 条策略！正在重新拉取订阅...`);
     dirtyRulesMap.value = {};
     await fetchCustomData();
-    if (inputUrl.value) {
+    if (activeProfileId.value) {
       await loadSubscription();
     }
   } catch (error: any) {
@@ -875,6 +1111,9 @@ const batchSaveRules = async () => {
 const ruleDialogVisible = ref(false);
 const isSubmittingRule = ref(false);
 const editingRuleId = ref<number | null>(null);
+const copyRulesDialogVisible = ref(false);
+const isCopyingRules = ref(false);
+const copyRulesSourceProfileId = ref<number | null>(null);
 
 const newRuleForm = ref({
   type: "DOMAIN-SUFFIX",
@@ -892,6 +1131,45 @@ const ruleTypes = [
   "MATCH",
   "PROCESS-NAME",
 ];
+
+const copyRuleSourceOptions = computed(() =>
+  profiles.value.filter((profile) => profile.id !== activeProfileId.value),
+);
+
+const openCopyRulesDialog = () => {
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
+  copyRulesSourceProfileId.value = copyRuleSourceOptions.value[0]?.id || null;
+  copyRulesDialogVisible.value = true;
+};
+
+const copyRulesFromProfile = async () => {
+  if (!activeProfileId.value || !copyRulesSourceProfileId.value) {
+    ElMessage.warning("请选择来源配置");
+    return;
+  }
+  isCopyingRules.value = true;
+  try {
+    const res = await axios.post(
+      buildBackendUrl(`/api/profiles/${activeProfileId.value}/copy-rules`),
+      { source_profile_id: copyRulesSourceProfileId.value },
+    );
+    if (res.data.code === 200) {
+      ElMessage.success(`规则复制成功，来源规则 ${res.data.data?.copied || 0} 条`);
+      copyRulesDialogVisible.value = false;
+      await fetchCustomData();
+      await loadSubscription();
+    } else {
+      ElMessage.error(res.data.message || "复制规则失败");
+    }
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.message || "复制规则失败");
+  } finally {
+    isCopyingRules.value = false;
+  }
+};
 
 const openRuleDialog = () => {
   editingRuleId.value = null;
@@ -939,7 +1217,7 @@ const deleteCustomRule = (row: any) => {
         if (res.data.code === 200) {
           ElMessage.success("自定义分流规则已成功移除！");
           await fetchCustomData();
-          if (inputUrl.value) {
+          if (activeProfileId.value) {
             await loadSubscription();
           }
         }
@@ -959,8 +1237,12 @@ const saveCustomRule = async () => {
     ElMessage.warning("请输入匹配内容 (Payload)");
     return;
   }
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
 
-  let submitData = { ...newRuleForm.value };
+  let submitData = { ...newRuleForm.value, profile_id: activeProfileId.value };
   if (!submitData.payload) {
     submitData.payload = "-";
   }
@@ -985,7 +1267,7 @@ const saveCustomRule = async () => {
       );
       ruleDialogVisible.value = false;
       await fetchCustomData();
-      if (inputUrl.value) {
+      if (activeProfileId.value) {
         await loadSubscription();
       }
     } else {
@@ -1254,57 +1536,119 @@ const submitChangePassword = async () => {
       @change="handleFileUpload" 
     />
 
-    <!-- 中部内容主体区 -->
-    <main class="main-content">
-      <!-- 控制卡片面板 -->
-      <section class="control-panel glass-card">
-        <h2 class="section-title">自适应 Base64 地址获取器</h2>
-        <p class="section-desc">
-          输入任意提供 Base64 编码数据的订阅地址或接口
-          URL，后端将自动请求、清洗并进行多重自适应解码。
-        </p>
+	    <!-- 中部内容主体区 -->
+	    <main class="main-content">
+	      <!-- 多配置管理面板 -->
+	      <section class="profiles-panel glass-card" v-loading="isProfilesLoading">
+	        <div class="profiles-header">
+	          <div>
+	            <h2 class="section-title">配置管理</h2>
+	            <p class="section-desc">
+	              当前订阅链接、节点、策略组和规则都跟随所选配置独立生效。
+	            </p>
+	          </div>
+	          <div class="profiles-actions">
+	            <el-button type="primary" icon="Plus" @click="openCreateProfileDialog">
+	              新增配置
+	            </el-button>
+	            <el-button
+	              :disabled="!currentProfile"
+	              icon="Refresh"
+	              :loading="isLoading"
+	              @click="refreshCurrentProfile"
+	            >
+	              刷新当前
+	            </el-button>
+	          </div>
+	        </div>
 
-        <div class="input-area">
-          <el-input
-            v-model="inputUrl"
-            placeholder="请输入订阅地址 URL (例如: https://example.com/sub)..."
-            clearable
-            @clear="handleClear"
-            @keyup.enter="handleDecode"
-            :disabled="isLoading"
-            class="decode-input"
-          >
+	        <div v-if="profiles.length > 0" class="profiles-grid">
+	          <button
+	            v-for="profile in profiles"
+	            :key="profile.id"
+	            type="button"
+	            class="profile-card"
+	            :class="{ 'is-active': activeProfileId === profile.id }"
+	            @click="selectProfile(profile)"
+	          >
+	            <div class="profile-card-main">
+	              <span class="profile-name">{{ profile.name }}</span>
+	              <el-tag size="small" :type="profile.source_type === 'local' ? 'success' : 'primary'">
+	                {{ profile.source_type === 'local' ? '本地 YAML' : '远程订阅' }}
+	              </el-tag>
+	            </div>
+	            <div class="profile-meta">
+	              {{ profile.source_type === 'local' ? '不依赖订阅地址' : profile.url }}
+	            </div>
+	            <div class="profile-actions" @click.stop>
+	              <el-button size="small" icon="Edit" text @click="openEditProfileDialog(profile)">
+	                编辑
+	              </el-button>
+	              <el-button size="small" icon="Delete" text type="danger" @click="deleteProfile(profile)">
+	                删除
+	              </el-button>
+	            </div>
+	          </button>
+	        </div>
+	        <el-empty v-else description="暂无配置，请先新增一个远程订阅或本地 YAML 配置" />
+	      </section>
+
+	      <!-- 控制卡片面板 -->
+	      <section class="control-panel glass-card">
+	        <h2 class="section-title">
+	          {{ currentProfile?.source_type === 'local' ? '本地 YAML 配置预览' : '自适应 Base64 地址获取器' }}
+	        </h2>
+	        <p class="section-desc">
+	          <template v-if="currentProfile?.source_type === 'local'">
+	            本地配置不请求上游订阅，保存后会直接基于完整 YAML 生成各客户端配置地址。
+	          </template>
+	          <template v-else>
+	            输入任意提供 Base64 编码数据的订阅地址或接口
+	            URL，后端将自动请求、清洗并进行多重自适应解码。
+	          </template>
+	        </p>
+
+	        <div class="input-area">
+	          <el-input
+	            v-model="inputUrl"
+	            placeholder="请输入订阅地址 URL (例如: https://example.com/sub)..."
+	            clearable
+	            @clear="handleClear"
+	            @keyup.enter="handleDecode"
+	            :disabled="isLoading || currentProfile?.source_type === 'local'"
+	            class="decode-input"
+	          >
             <template #prefix>
               <el-icon class="input-prefix-icon"><Link /></el-icon>
             </template>
           </el-input>
 
           <div class="button-group">
-            <el-button
-              v-if="hasSubscription"
-              type="success"
-              @click="handleDecode"
-              :loading="isLoading"
-              class="action-btn"
-            >
-              刷新订阅
-            </el-button>
-            <el-button
-              v-else
-              type="primary"
-              @click="handleDecode"
-              :loading="isLoading"
-              class="action-btn"
-            >
-              一键抓取并解码
-            </el-button>
-            <el-button
-              type="info"
-              plain
-              @click="handleQuickMock"
-              :disabled="isLoading"
-              class="mock-btn"
-            >
+	            <el-button
+	              v-if="hasSubscription"
+	              type="success"
+	              @click="currentProfile?.source_type === 'local' ? refreshCurrentProfile() : handleDecode()"
+	              :loading="isLoading"
+	              class="action-btn"
+	            >
+	              {{ currentProfile?.source_type === 'local' ? '刷新本地配置' : '刷新订阅' }}
+	            </el-button>
+	            <el-button
+	              v-else
+	              type="primary"
+	              @click="currentProfile?.source_type === 'local' ? refreshCurrentProfile() : handleDecode()"
+	              :loading="isLoading"
+	              class="action-btn"
+	            >
+	              {{ currentProfile?.source_type === 'local' ? '生成本地预览' : '一键抓取并解码' }}
+	            </el-button>
+	            <el-button
+	              type="info"
+	              plain
+	              @click="handleQuickMock"
+	              :disabled="isLoading || currentProfile?.source_type === 'local'"
+	              class="mock-btn"
+	            >
               Mock 快速测试
             </el-button>
           </div>
@@ -1627,16 +1971,25 @@ const submitChangePassword = async () => {
                   >
                     💾 批量应用修改 ({{ Object.keys(dirtyRulesMap).length }})
                   </el-button>
-                  <el-button
-                    type="primary"
-                    effect="dark"
-                    round
-                    @click="openRuleDialog"
-                  >
-                    <span style="margin-right: 4px; font-weight: bold">+</span>
-                    新增自定义规则
-                  </el-button>
-                </div>
+	                  <el-button
+	                    type="primary"
+	                    effect="dark"
+	                    round
+	                    @click="openRuleDialog"
+	                  >
+	                    <span style="margin-right: 4px; font-weight: bold">+</span>
+	                    新增自定义规则
+	                  </el-button>
+	                  <el-button
+	                    type="warning"
+	                    plain
+	                    round
+	                    :disabled="copyRuleSourceOptions.length === 0"
+	                    @click="openCopyRulesDialog"
+	                  >
+	                    从其他配置复制规则
+	                  </el-button>
+	                </div>
 
                 <el-table
                   :data="paginatedRules"
@@ -1778,10 +2131,88 @@ const submitChangePassword = async () => {
           </el-tabs>
         </section>
       </transition>
-    </main>
+	    </main>
 
-    <!-- 自定义策略组弹窗 -->
-    <el-dialog
+	    <!-- 配置新增/编辑弹窗 -->
+	    <el-dialog
+	      v-model="profileDialogVisible"
+	      :title="editingProfileId ? '编辑配置' : '新增配置'"
+	      width="720px"
+	      class="glass-dialog"
+	    >
+	      <el-form label-position="top">
+	        <el-form-item label="配置名称">
+	          <el-input v-model="profileForm.name" placeholder="例如：家庭路由、本地备用、公司网络" />
+	        </el-form-item>
+	        <el-form-item label="配置来源">
+	          <el-segmented
+	            v-model="profileForm.source_type"
+	            :options="[
+	              { label: '远程订阅', value: 'remote' },
+	              { label: '本地 YAML', value: 'local' },
+	            ]"
+	          />
+	        </el-form-item>
+	        <el-form-item v-if="profileForm.source_type === 'remote'" label="远程订阅地址">
+	          <el-input
+	            v-model="profileForm.url"
+	            placeholder="https://example.com/sub"
+	            clearable
+	          />
+	        </el-form-item>
+	        <el-form-item v-else label="完整 Clash/Mihomo YAML">
+	          <el-input
+	            v-model="profileForm.local_content"
+	            type="textarea"
+	            :rows="14"
+	            placeholder="请粘贴完整 YAML 配置内容"
+	            class="profile-yaml-input"
+	          />
+	        </el-form-item>
+	      </el-form>
+	      <template #footer>
+	        <el-button @click="profileDialogVisible = false" plain>取消</el-button>
+	        <el-button type="primary" :loading="isSubmittingProfile" @click="saveProfile">
+	          保存配置
+	        </el-button>
+	      </template>
+	    </el-dialog>
+
+	    <!-- 规则复制弹窗 -->
+	    <el-dialog
+	      v-model="copyRulesDialogVisible"
+	      title="从其他配置复制规则"
+	      width="520px"
+	      class="glass-dialog"
+	    >
+	      <el-form label-position="top">
+	        <el-form-item label="来源配置">
+	          <el-select v-model="copyRulesSourceProfileId" style="width: 100%" popper-class="glass-dropdown">
+	            <el-option
+	              v-for="profile in copyRuleSourceOptions"
+	              :key="profile.id"
+	              :label="profile.name"
+	              :value="profile.id"
+	            />
+	          </el-select>
+	        </el-form-item>
+	        <el-alert
+	          type="warning"
+	          show-icon
+	          :closable="false"
+	          title="复制后同类型、同匹配内容的规则会由来源配置覆盖，当前配置其他规则会保留。"
+	        />
+	      </el-form>
+	      <template #footer>
+	        <el-button @click="copyRulesDialogVisible = false" plain>取消</el-button>
+	        <el-button type="warning" :loading="isCopyingRules" @click="copyRulesFromProfile">
+	          确认复制
+	        </el-button>
+	      </template>
+	    </el-dialog>
+
+	    <!-- 自定义策略组弹窗 -->
+	    <el-dialog
       v-model="groupDialogVisible"
       :title="
         editingGroupId ? '✨ 编辑云端自定义策略组' : '✨ 新增云端自定义策略组'
@@ -2124,10 +2555,11 @@ const submitChangePassword = async () => {
       width="640px"
       class="glass-dialog"
     >
-      <div style="padding: 10px 0;">
-        <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 14px; line-height: 1.5;">
-          请选择要使用的客户端配置地址。Clash/Mihomo 使用默认 YAML 订阅；Surge 最新版与 Surge 5.7.6 使用各自专用 .conf 配置地址；Shadowrocket 请优先点击“安装到 Shadowrocket”创建新配置，失败时再复制配置地址到 iOS 的“配置”里通过 URL 下载，不要作为首页普通服务器订阅导入。
-          <template v-if="showRegeneratedWarning">
+	      <div style="padding: 10px 0;">
+	        <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 14px; line-height: 1.5;">
+	          当前配置：<strong style="color: var(--text-primary);">{{ currentProfileName }}</strong><br/>
+	          请选择要使用的客户端配置地址。Clash/Mihomo 使用默认 YAML 订阅；Surge 最新版与 Surge 5.7.6 使用各自专用 .conf 配置地址；Shadowrocket 请优先点击“安装到 Shadowrocket”创建新配置，失败时再复制配置地址到 iOS 的“配置”里通过 URL 下载，不要作为首页普通服务器订阅导入。
+	          <template v-if="showRegeneratedWarning">
             <br/><br/>
             <strong style="color: var(--el-color-danger);">重新生成订阅会覆盖旧 token，旧订阅地址将立即失效。</strong>
           </template>
@@ -2364,9 +2796,85 @@ const submitChangePassword = async () => {
   gap: 24px;
 }
 
+.profiles-panel,
 .control-panel {
   padding: 30px;
   text-align: left;
+}
+
+.profiles-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+}
+
+.profiles-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.profiles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.profile-card {
+  width: 100%;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+}
+
+.profile-card:hover,
+.profile-card.is-active {
+  border-color: rgba(99, 102, 241, 0.7);
+  background: rgba(99, 102, 241, 0.12);
+  transform: translateY(-1px);
+}
+
+.profile-card-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.profile-meta {
+  min-height: 20px;
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.profile-yaml-input :deep(.el-textarea__inner) {
+  font-family: "Fira Code", "Menlo", monospace;
 }
 
 .section-title {
@@ -2521,6 +3029,15 @@ const submitChangePassword = async () => {
 }
 
 @media (max-width: 768px) {
+  .profiles-header {
+    flex-direction: column;
+  }
+
+  .profiles-actions,
+  .profiles-actions :deep(.el-button) {
+    width: 100%;
+  }
+
   .result-actions {
     width: 100%;
   }
