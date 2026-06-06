@@ -28,6 +28,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 //go:embed dist
@@ -122,6 +123,7 @@ func main() {
 	// 注册自定义分流规则 CRUD 接口
 	api.GET("/custom-rules", handleGetCustomRules)
 	api.POST("/custom-rules", handleCreateCustomRule)
+	api.POST("/custom-rules/batch", handleBatchSaveCustomRules)
 	api.PUT("/custom-rules/:id", handleUpdateCustomRule)
 	api.DELETE("/custom-rules/:id", handleDeleteCustomRule)
 
@@ -1794,6 +1796,116 @@ func handleGetCustomRules(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": rules})
+}
+
+type customRuleWritePayload struct {
+	Type    string `json:"type"`
+	Payload string `json:"payload"`
+	Target  string `json:"target"`
+}
+
+type batchCustomRulesRequest struct {
+	ProfileID uint                     `json:"profile_id"`
+	Rules     []customRuleWritePayload `json:"rules"`
+}
+
+func normalizeCustomRuleWritePayload(input customRuleWritePayload) (customRuleWritePayload, error) {
+	rule := customRuleWritePayload{
+		Type:    strings.TrimSpace(input.Type),
+		Payload: strings.TrimSpace(input.Payload),
+		Target:  strings.TrimSpace(input.Target),
+	}
+	if rule.Type == "" {
+		return customRuleWritePayload{}, fmt.Errorf("规则类型不能为空")
+	}
+	if rule.Payload == "" {
+		rule.Payload = "-"
+	}
+	if rule.Target == "" {
+		return customRuleWritePayload{}, fmt.Errorf("目标策略不能为空")
+	}
+	return rule, nil
+}
+
+func normalizeBatchCustomRules(profileID uint, inputs []customRuleWritePayload) ([]CustomRule, error) {
+	if len(inputs) == 0 {
+		return nil, fmt.Errorf("没有需要保存的规则")
+	}
+
+	rules := make([]CustomRule, 0, len(inputs))
+	ruleIndexes := make(map[string]int, len(inputs))
+	for idx, input := range inputs {
+		rule, err := normalizeCustomRuleWritePayload(input)
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 条规则无效: %w", idx+1, err)
+		}
+
+		key := rule.Type + "\x00" + rule.Payload
+		if existingIndex, ok := ruleIndexes[key]; ok {
+			rules[existingIndex].Target = rule.Target
+			continue
+		}
+
+		ruleIndexes[key] = len(rules)
+		rules = append(rules, CustomRule{
+			ProfileID: profileID,
+			Type:      rule.Type,
+			Payload:   rule.Payload,
+			Target:    rule.Target,
+		})
+	}
+	return rules, nil
+}
+
+func upsertCustomRulesBatch(rules []CustomRule) error {
+	if len(rules) == 0 {
+		return nil
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{
+				{Name: "profile_id"},
+				{Name: "type"},
+				{Name: "payload"},
+			},
+			DoUpdates: clause.AssignmentColumns([]string{"target"}),
+		}).Create(&rules).Error
+	})
+}
+
+func handleBatchSaveCustomRules(c *gin.Context) {
+	var req batchCustomRulesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+	profileID, ok := resolveRequestProfileID(c, req.ProfileID)
+	if !ok {
+		return
+	}
+	if err := DB.First(&SubscriptionProfile{}, profileID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "配置不存在"})
+		return
+	}
+
+	rules, err := normalizeBatchCustomRules(profileID, req.Rules)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+	if err := upsertCustomRulesBatch(rules); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "批量保存规则失败", "error": err.Error()})
+		return
+	}
+
+	ReapplyRulesToProfile(profileID)
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "规则批量保存成功",
+		"data": gin.H{
+			"saved": len(rules),
+		},
+	})
 }
 
 // handleCreateCustomRule 创建或保存自定义规则 (支持按 Type 和 Payload 进行 Upsert 智能覆盖)

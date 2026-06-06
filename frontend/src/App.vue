@@ -1319,24 +1319,21 @@ const batchSaveRules = async () => {
   isSubmittingRule.value = true;
   
   try {
-    const promises = Object.values(dirtyRulesMap.value).map((row: any) => {
-      let key = getRuleIdentityKey(row);
-      let customInfo = customRulesDict.value[key];
-      let submitData = {
-        profile_id: activeProfileId.value,
-        type: row.type,
-        payload: row.payload === "-" ? "-" : row.payload,
-        target: row.target,
-      };
-      if (customInfo) {
-        return axios.put(buildBackendUrl(`/api/custom-rules/${customInfo.ID}`), submitData);
-      } else {
-        return axios.post(buildBackendUrl("/api/custom-rules"), submitData);
-      }
+    const rules = Object.values(dirtyRulesMap.value).map((row: any) => ({
+      type: row.type,
+      payload: row.payload === "-" ? "-" : row.payload,
+      target: row.target,
+    }));
+    const res = await axios.post(buildBackendUrl("/api/custom-rules/batch"), {
+      profile_id: activeProfileId.value,
+      rules,
     });
+    if (res.data.code !== 200) {
+      throw new Error(res.data.message || "批量保存规则失败");
+    }
 
-    await Promise.all(promises);
-    ElMessage.success(`成功批量接管 ${promises.length} 条策略！正在重新拉取订阅...`);
+    const savedCount = res.data.data?.saved || rules.length;
+    ElMessage.success(`成功批量接管 ${savedCount} 条策略！正在重新拉取订阅...`);
     dirtyRulesMap.value = {};
     await fetchCustomData();
     if (activeProfileId.value) {
