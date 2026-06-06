@@ -34,3 +34,21 @@ func TestNormalizeBatchCustomRulesRejectsInvalidRule(t *testing.T) {
 		t.Fatal("expected empty target to be rejected")
 	}
 }
+
+func TestCustomRuleBatchProgressSteps(t *testing.T) {
+	got := customRuleBatchProgressSteps(250, 100)
+	want := []int{100, 200, 250}
+	if len(got) != len(want) {
+		t.Fatalf("progress steps length = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("progress step %d = %d, want %d", i, got[i], want[i])
+		}
+	}
+
+	got = customRuleBatchProgressSteps(1000, 100)
+	if len(got) != 10 || got[0] != 100 || got[len(got)-1] != 1000 {
+		t.Fatalf("progress steps for 1000 rules = %v, want 100..1000", got)
+	}
+}

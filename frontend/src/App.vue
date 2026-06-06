@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElLoading, ElMessage, ElMessageBox } from "element-plus";
 import { Link, Edit, Delete, Loading, ArrowDown } from "@element-plus/icons-vue";
 import axios from "axios";
 import { Codemirror } from "vue-codemirror";
@@ -1281,6 +1281,107 @@ const markRuleDirty = (row: any) => {
   dirtyRulesMap.value[getRuleIdentityKey(row)] = row;
 };
 
+interface BatchRuleProgress {
+  stage: "saving" | "reapplying" | "complete";
+  current: number;
+  total: number;
+  saved?: number;
+  message?: string;
+}
+
+interface ParsedSSEMessage {
+  event: string;
+  data: string;
+}
+
+let batchRulesLoading: ReturnType<typeof ElLoading.service> | null = null;
+
+const parseSSEMessage = (rawMessage: string): ParsedSSEMessage | null => {
+  const lines = rawMessage.split("\n");
+  const dataLines: string[] = [];
+  let event = "message";
+
+  for (const line of lines) {
+    if (line.startsWith("event:")) {
+      event = line.slice("event:".length).trim();
+      continue;
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length).trimStart());
+    }
+  }
+
+  if (dataLines.length === 0) return null;
+  return { event, data: dataLines.join("\n") };
+};
+
+const updateBatchRulesLoading = (progress: BatchRuleProgress) => {
+  const fallbackText =
+    progress.stage === "reapplying"
+      ? "规则已保存，正在重新应用订阅配置"
+      : `批量应用规则中：${progress.current}/${progress.total}`;
+  batchRulesLoading?.setText(progress.message || fallbackText);
+};
+
+const readBatchRulesSSE = async (
+  response: Response,
+  onProgress: (progress: BatchRuleProgress) => void,
+): Promise<BatchRuleProgress> => {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("当前浏览器不支持读取批量保存进度流");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completeProgress: BatchRuleProgress | null = null;
+
+  const handleRawMessage = (rawMessage: string) => {
+    const parsed = parseSSEMessage(rawMessage.trim());
+    if (!parsed) return;
+
+    const data = JSON.parse(parsed.data);
+    if (parsed.event === "error") {
+      throw new Error(data.message || "批量保存规则失败");
+    }
+    if (parsed.event === "progress") {
+      onProgress(data as BatchRuleProgress);
+      return;
+    }
+    if (parsed.event === "complete") {
+      const progress = data as BatchRuleProgress;
+      completeProgress = progress;
+      onProgress(progress);
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    buffer = buffer.replace(/\r\n/g, "\n");
+
+    let boundaryIndex = buffer.indexOf("\n\n");
+    while (boundaryIndex >= 0) {
+      const rawMessage = buffer.slice(0, boundaryIndex);
+      buffer = buffer.slice(boundaryIndex + 2);
+      handleRawMessage(rawMessage);
+      boundaryIndex = buffer.indexOf("\n\n");
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    handleRawMessage(buffer);
+  }
+
+  if (!completeProgress) {
+    throw new Error("批量保存进度流异常结束");
+  }
+  return completeProgress;
+};
+
 const applyBulkRuleTargetToFilteredRules = () => {
   const nextTarget = bulkRuleTarget.value.trim();
   if (!nextTarget) {
@@ -1324,15 +1425,38 @@ const batchSaveRules = async () => {
       payload: row.payload === "-" ? "-" : row.payload,
       target: row.target,
     }));
-    const res = await axios.post(buildBackendUrl("/api/custom-rules/batch"), {
-      profile_id: activeProfileId.value,
-      rules,
+
+    batchRulesLoading = ElLoading.service({
+      lock: true,
+      text: `批量应用规则中：0/${rules.length}`,
+      background: "rgba(10, 14, 24, 0.72)",
     });
-    if (res.data.code !== 200) {
-      throw new Error(res.data.message || "批量保存规则失败");
+
+    const token = localStorage.getItem("token");
+    const response = await fetch(buildBackendUrl("/api/custom-rules/batch/stream"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        profile_id: activeProfileId.value,
+        rules,
+      }),
+    });
+
+    if (response.status === 401) {
+      localStorage.removeItem("token");
+      window.dispatchEvent(new CustomEvent("auth-failed"));
+      throw new Error("登录状态已失效，请重新登录");
+    }
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || "批量保存规则失败");
     }
 
-    const savedCount = res.data.data?.saved || rules.length;
+    const completeProgress = await readBatchRulesSSE(response, updateBatchRulesLoading);
+    const savedCount = completeProgress.saved || completeProgress.total || rules.length;
     ElMessage.success(`成功批量接管 ${savedCount} 条策略！正在重新拉取订阅...`);
     dirtyRulesMap.value = {};
     await fetchCustomData();
@@ -1342,6 +1466,8 @@ const batchSaveRules = async () => {
   } catch (error: any) {
     ElMessage.error("部分策略保存失败: " + (error.response?.data?.message || error.message));
   } finally {
+    batchRulesLoading?.close();
+    batchRulesLoading = null;
     isSubmittingRule.value = false;
   }
 };

@@ -124,6 +124,7 @@ func main() {
 	api.GET("/custom-rules", handleGetCustomRules)
 	api.POST("/custom-rules", handleCreateCustomRule)
 	api.POST("/custom-rules/batch", handleBatchSaveCustomRules)
+	api.POST("/custom-rules/batch/stream", handleBatchSaveCustomRulesStream)
 	api.PUT("/custom-rules/:id", handleUpdateCustomRule)
 	api.DELETE("/custom-rules/:id", handleDeleteCustomRule)
 
@@ -1809,6 +1810,16 @@ type batchCustomRulesRequest struct {
 	Rules     []customRuleWritePayload `json:"rules"`
 }
 
+type customRulesBatchProgress struct {
+	Stage   string `json:"stage"`
+	Current int    `json:"current"`
+	Total   int    `json:"total"`
+	Saved   int    `json:"saved,omitempty"`
+	Message string `json:"message"`
+}
+
+const customRulesStreamBatchSize = 100
+
 func normalizeCustomRuleWritePayload(input customRuleWritePayload) (customRuleWritePayload, error) {
 	rule := customRuleWritePayload{
 		Type:    strings.TrimSpace(input.Type),
@@ -1857,20 +1868,67 @@ func normalizeBatchCustomRules(profileID uint, inputs []customRuleWritePayload) 
 	return rules, nil
 }
 
-func upsertCustomRulesBatch(rules []CustomRule) error {
+func customRuleBatchProgressSteps(total int, batchSize int) []int {
+	if total <= 0 {
+		return nil
+	}
+	if batchSize <= 0 {
+		batchSize = total
+	}
+
+	steps := make([]int, 0, (total+batchSize-1)/batchSize)
+	for current := batchSize; current < total; current += batchSize {
+		steps = append(steps, current)
+	}
+	return append(steps, total)
+}
+
+func upsertCustomRulesBatchWithProgress(rules []CustomRule, batchSize int, onProgress func(current, total int) error) error {
 	if len(rules) == 0 {
 		return nil
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		return tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{
-				{Name: "profile_id"},
-				{Name: "type"},
-				{Name: "payload"},
-			},
-			DoUpdates: clause.AssignmentColumns([]string{"target"}),
-		}).Create(&rules).Error
+		steps := customRuleBatchProgressSteps(len(rules), batchSize)
+		previous := 0
+		for _, current := range steps {
+			batch := rules[previous:current]
+			if err := tx.Clauses(clause.OnConflict{
+				Columns: []clause.Column{
+					{Name: "profile_id"},
+					{Name: "type"},
+					{Name: "payload"},
+				},
+				DoUpdates: clause.AssignmentColumns([]string{"target"}),
+			}).Create(&batch).Error; err != nil {
+				return err
+			}
+			if onProgress != nil {
+				if err := onProgress(current, len(rules)); err != nil {
+					return err
+				}
+			}
+			previous = current
+		}
+		return nil
 	})
+}
+
+func upsertCustomRulesBatch(rules []CustomRule) error {
+	return upsertCustomRulesBatchWithProgress(rules, len(rules), nil)
+}
+
+func writeSSEEvent(c *gin.Context, event string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, data); err != nil {
+		return err
+	}
+	if flusher, ok := c.Writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return nil
 }
 
 func handleBatchSaveCustomRules(c *gin.Context) {
@@ -1905,6 +1963,73 @@ func handleBatchSaveCustomRules(c *gin.Context) {
 		"data": gin.H{
 			"saved": len(rules),
 		},
+	})
+}
+
+func handleBatchSaveCustomRulesStream(c *gin.Context) {
+	var req batchCustomRulesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+	profileID, ok := resolveRequestProfileID(c, req.ProfileID)
+	if !ok {
+		return
+	}
+	if err := DB.First(&SubscriptionProfile{}, profileID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "配置不存在"})
+		return
+	}
+
+	rules, err := normalizeBatchCustomRules(profileID, req.Rules)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("X-Accel-Buffering", "no")
+
+	total := len(rules)
+	if err := writeSSEEvent(c, "progress", customRulesBatchProgress{
+		Stage:   "saving",
+		Current: 0,
+		Total:   total,
+		Message: fmt.Sprintf("准备保存 0/%d 条规则", total),
+	}); err != nil {
+		return
+	}
+
+	err = upsertCustomRulesBatchWithProgress(rules, customRulesStreamBatchSize, func(current, total int) error {
+		return writeSSEEvent(c, "progress", customRulesBatchProgress{
+			Stage:   "saving",
+			Current: current,
+			Total:   total,
+			Message: fmt.Sprintf("已保存 %d/%d 条规则", current, total),
+		})
+	})
+	if err != nil {
+		_ = writeSSEEvent(c, "error", gin.H{"message": "批量保存规则失败: " + err.Error()})
+		return
+	}
+
+	if err := writeSSEEvent(c, "progress", customRulesBatchProgress{
+		Stage:   "reapplying",
+		Current: total,
+		Total:   total,
+		Message: "规则已保存，正在重新应用订阅配置",
+	}); err != nil {
+		return
+	}
+
+	ReapplyRulesToProfile(profileID)
+	_ = writeSSEEvent(c, "complete", customRulesBatchProgress{
+		Stage:   "complete",
+		Current: total,
+		Total:   total,
+		Saved:   total,
+		Message: fmt.Sprintf("规则批量保存完成，共保存 %d 条规则", total),
 	})
 }
 
