@@ -241,23 +241,41 @@ const loadProfiles = async (preferredProfileId?: number) => {
   }
 };
 
-const loadSubscription = async () => {
+interface LoadSubscriptionOptions {
+  preserveActiveTab?: boolean;
+  preferredTab?: string;
+}
+
+function isResultTabAvailable(tab: string) {
+  if (tab === "nodes") return parsedNodes.value.length > 0;
+  if (tab === "groups") return proxyGroups.value.length > 0;
+  if (tab === "rules") return (parsedConfig.value?.rules?.length || 0) > 0;
+  return tab === "text" || tab === "raw";
+}
+
+function applyActiveTabAfterSubscriptionLoad(options: LoadSubscriptionOptions, previousTab: string) {
+  const preferredTab = options.preferredTab || (options.preserveActiveTab ? previousTab : "");
+  if (preferredTab && isResultTabAvailable(preferredTab)) {
+    activeTab.value = preferredTab;
+    return;
+  }
+  activeTab.value = parsedNodes.value.length > 0 ? "nodes" : "text";
+}
+
+const loadSubscription = async (options: LoadSubscriptionOptions = {}) => {
   if (!activeProfileId.value) {
     result.value = null;
     hasSubscription.value = false;
     return;
   }
+  const previousTab = activeTab.value;
   try {
     const res = await axios.get(buildBackendUrl(`/api/profiles/${activeProfileId.value}/subscription`));
     if (res.data.code === 200 && res.data.data) {
       inputUrl.value = res.data.data.url;
       result.value = res.data.data;
       hasSubscription.value = true;
-      if (parsedNodes.value.length > 0) {
-        activeTab.value = "nodes";
-      } else {
-        activeTab.value = "text";
-      }
+      applyActiveTabAfterSubscriptionLoad(options, previousTab);
     }
   } catch (e: any) {
     result.value = null;
@@ -581,13 +599,37 @@ const ruleSearchQuery = ref("");
 
 // 分流规则目标策略筛选
 const ruleTargetFilter = ref("");
+
+const parseRuleForDisplay = (ruleStr: string) => {
+  const parts = String(ruleStr).split(",").map((part) => part.trim());
+  const type = parts[0] || "UNKNOWN";
+  const noPayloadRule = ["MATCH", "FINAL"].includes(type.toUpperCase());
+  if (noPayloadRule || parts.length <= 2) {
+    return {
+      raw: ruleStr,
+      type,
+      payload: "-",
+      target: parts.slice(1).join(",") || "-",
+    };
+  }
+  const optionSuffixes = new Set(["no-resolve"]);
+  let targetStart = parts.length - 1;
+  if (parts.length >= 4 && optionSuffixes.has(parts[parts.length - 1].toLowerCase())) {
+    targetStart = parts.length - 2;
+  }
+  return {
+    raw: ruleStr,
+    type,
+    payload: parts.slice(1, targetStart).join(",") || "-",
+    target: parts.slice(targetStart).join(",") || "-",
+  };
+};
+
 const ruleTargets = computed(() => {
   if (!parsedConfig.value || !parsedConfig.value.rules) return [];
   const targets = new Set<string>();
   parsedConfig.value.rules.forEach((ruleStr: string) => {
-    const parts = ruleStr.split(",");
-    const target = parts.length > 2 ? parts[2] : parts[1] || "-";
-    targets.add(target);
+    targets.add(parseRuleForDisplay(ruleStr).target);
   });
   return Array.from(targets).sort();
 });
@@ -604,15 +646,7 @@ watch([ruleSearchQuery, ruleTargetFilter], () => {
 // 分流规则解析 (拆解 DOMAIN-SUFFIX,google.com,PROXY)
 const parsedRules = computed<any[]>(() => {
   if (!parsedConfig.value || !parsedConfig.value.rules) return [];
-  let rules = parsedConfig.value.rules.map((ruleStr: string) => {
-    const parts = ruleStr.split(",");
-    return {
-      raw: ruleStr,
-      type: parts[0] || "UNKNOWN",
-      payload: parts.length > 2 ? parts[1] : "-",
-      target: parts.length > 2 ? parts[2] : parts[1] || "-",
-    };
-  });
+  let rules = parsedConfig.value.rules.map((ruleStr: string) => parseRuleForDisplay(ruleStr));
 
   if (ruleTargetFilter.value) {
     rules = rules.filter((r: any) => r.target === ruleTargetFilter.value);
@@ -745,6 +779,7 @@ const newGroupForm = ref({
 });
 
 const groupTypes = ["select", "url-test", "fallback", "load-balance"];
+const builtInGroupProxies = [{ label: "DIRECT (直连)", value: "DIRECT" }];
 
 const openGroupDialog = () => {
   editingGroupId.value = null;
@@ -790,7 +825,7 @@ const deleteCustomGroup = (groupName: string) => {
           ElMessage.success("自定义策略组已成功删除！");
           await fetchCustomData();
           if (activeProfileId.value) {
-            await loadSubscription();
+            await loadSubscription({ preferredTab: "groups" });
           }
         }
       } catch (err: any) {
@@ -812,6 +847,12 @@ const selectAllExistingGroups = () => {
     if (!newGroupForm.value.proxies.includes(g)) {
       newGroupForm.value.proxies.push(g);
     }
+  }
+};
+
+const selectDirectPolicy = () => {
+  if (!newGroupForm.value.proxies.includes("DIRECT")) {
+    newGroupForm.value.proxies.push("DIRECT");
   }
 };
 
@@ -853,7 +894,7 @@ const saveCustomGroup = async () => {
       groupDialogVisible.value = false;
       await fetchCustomData();
       if (activeProfileId.value) {
-        await loadSubscription();
+        await loadSubscription({ preferredTab: "groups" });
       }
     } else {
       throw new Error(res.data.message);
@@ -1090,7 +1131,7 @@ const batchSaveRules = async () => {
     dirtyRulesMap.value = {};
     await fetchCustomData();
     if (activeProfileId.value) {
-      await loadSubscription();
+      await loadSubscription({ preferredTab: "rules" });
     }
   } catch (error: any) {
     ElMessage.error("部分策略保存失败: " + (error.response?.data?.message || error.message));
@@ -1105,6 +1146,7 @@ const isSubmittingRule = ref(false);
 const editingRuleId = ref<number | null>(null);
 const copyRulesDialogVisible = ref(false);
 const isCopyingRules = ref(false);
+const isLocalizingRules = ref(false);
 const copyRulesSourceProfileId = ref<number | null>(null);
 
 const newRuleForm = ref({
@@ -1153,7 +1195,7 @@ const copyRulesFromProfile = async () => {
       ElMessage.success(`规则复制成功，来源规则 ${res.data.data?.copied || 0} 条`);
       copyRulesDialogVisible.value = false;
       await fetchCustomData();
-      await loadSubscription();
+      await loadSubscription({ preferredTab: "rules" });
     } else {
       ElMessage.error(res.data.message || "复制规则失败");
     }
@@ -1161,6 +1203,39 @@ const copyRulesFromProfile = async () => {
     ElMessage.error(err.response?.data?.message || "复制规则失败");
   } finally {
     isCopyingRules.value = false;
+  }
+};
+
+const localizeRemoteRules = async () => {
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
+  if (currentProfile.value?.source_type !== "remote") {
+    ElMessage.warning("只有远程订阅配置可以本地化远程规则");
+    return;
+  }
+
+  isLocalizingRules.value = true;
+  try {
+    const res = await axios.post(
+      buildBackendUrl(`/api/profiles/${activeProfileId.value}/localize-rules`),
+    );
+    if (res.data.code === 200) {
+      const data = res.data.data || {};
+      ElMessage.success(
+        `远程规则本地化完成，新增 ${data.imported || 0} 条，跳过 ${data.skipped_existing || 0} 条`,
+      );
+      dirtyRulesMap.value = {};
+      await fetchCustomData();
+      await loadSubscription({ preferredTab: "rules" });
+    } else {
+      ElMessage.error(res.data.message || "本地化远程规则失败");
+    }
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.error || err.response?.data?.message || "本地化远程规则失败");
+  } finally {
+    isLocalizingRules.value = false;
   }
 };
 
@@ -1943,10 +2018,10 @@ const submitChangePassword = async () => {
 
               <div class="rules-container glass-card">
                 <div class="rules-toolbar" style="display: flex; gap: 15px;">
-                  <el-select 
-                    v-model="ruleTargetFilter" 
-                    placeholder="目标策略过滤" 
-                    clearable 
+                  <el-select
+                    v-model="ruleTargetFilter"
+                    placeholder="目标策略过滤"
+                    clearable
                     filterable
                     style="width: 220px;"
                     popper-class="glass-dropdown"
@@ -1975,25 +2050,35 @@ const submitChangePassword = async () => {
                   >
                     💾 批量应用修改 ({{ Object.keys(dirtyRulesMap).length }})
                   </el-button>
-	                  <el-button
-	                    type="primary"
-	                    effect="dark"
-	                    round
-	                    @click="openRuleDialog"
-	                  >
-	                    <span style="margin-right: 4px; font-weight: bold">+</span>
-	                    新增自定义规则
-	                  </el-button>
-	                  <el-button
-	                    type="warning"
-	                    plain
-	                    round
-	                    :disabled="copyRuleSourceOptions.length === 0"
-	                    @click="openCopyRulesDialog"
-	                  >
-	                    从其他配置复制规则
-	                  </el-button>
-	                </div>
+                  <el-button
+                    type="primary"
+                    effect="dark"
+                    round
+                    @click="openRuleDialog"
+                  >
+                    <span style="margin-right: 4px; font-weight: bold">+</span>
+                    新增自定义规则
+                  </el-button>
+                  <el-button
+                    v-if="currentProfile?.source_type === 'remote'"
+                    type="success"
+                    plain
+                    round
+                    :loading="isLocalizingRules"
+                    @click="localizeRemoteRules"
+                  >
+                    本地化远程规则
+                  </el-button>
+                  <el-button
+                    type="warning"
+                    plain
+                    round
+                    :disabled="copyRuleSourceOptions.length === 0"
+                    @click="openCopyRulesDialog"
+                  >
+                    从其他配置复制规则
+                  </el-button>
+                </div>
 
                 <el-table
                   :data="paginatedRules"
@@ -2258,6 +2343,14 @@ const submitChangePassword = async () => {
             >
               引入所有现有策略组
             </el-button>
+            <el-button
+              size="small"
+              type="success"
+              plain
+              @click="selectDirectPolicy"
+            >
+              加入 DIRECT 直连
+            </el-button>
           </div>
           <el-select
             v-model="newGroupForm.proxies"
@@ -2271,6 +2364,14 @@ const submitChangePassword = async () => {
               label="🌟 动态注入当前订阅全节点 [ALL_NODES]"
               value="[ALL_NODES]"
             />
+            <el-option-group label="内置策略">
+              <el-option
+                v-for="item in builtInGroupProxies"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
+              />
+            </el-option-group>
             <el-option-group label="现有策略组">
               <el-option
                 v-for="g in proxyGroups"

@@ -155,6 +155,82 @@ func TestBuildManualProfileYAMLFromResourcesKeepsCustomRules(t *testing.T) {
 	}
 }
 
+func TestExtractProfileRulesFromSubscriptionContentParsesClashRules(t *testing.T) {
+	content := `proxies: []
+proxy-groups: []
+rules:
+  - DOMAIN-SUFFIX,example.com,DIRECT
+  - GEOSITE,cn,DIRECT
+  - GEOIP,CN,DIRECT,no-resolve
+  - AND,((DOMAIN,example.org),(NETWORK,UDP)),REJECT
+  - MATCH,代理
+`
+
+	got, err := extractProfileRulesFromSubscriptionContent(content, 7)
+	if err != nil {
+		t.Fatalf("extractProfileRulesFromSubscriptionContent returned error: %v", err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("rules length = %d, want 5", len(got))
+	}
+
+	byKey := map[string]CustomRule{}
+	for _, rule := range got {
+		if rule.ProfileID != 7 {
+			t.Fatalf("rule ProfileID = %d, want 7", rule.ProfileID)
+		}
+		byKey[rule.Type+"\x00"+rule.Payload] = rule
+	}
+
+	if byKey["DOMAIN-SUFFIX\x00example.com"].Target != "DIRECT" {
+		t.Fatal("DOMAIN-SUFFIX rule target was not parsed")
+	}
+	if byKey["GEOSITE\x00cn"].Target != "DIRECT" {
+		t.Fatal("GEOSITE rule target was not parsed")
+	}
+	if byKey["GEOIP\x00CN"].Target != "DIRECT,no-resolve" {
+		t.Fatalf("GEOIP target = %q, want DIRECT,no-resolve", byKey["GEOIP\x00CN"].Target)
+	}
+	if byKey["AND\x00((DOMAIN,example.org),(NETWORK,UDP))"].Target != "REJECT" {
+		t.Fatal("AND rule with comma payload was not parsed")
+	}
+	if byKey["MATCH\x00-"].Target != "代理" {
+		t.Fatal("MATCH rule target was not parsed")
+	}
+}
+
+func TestFilterNewLocalizedRulesSkipsExistingManualRules(t *testing.T) {
+	existing := []CustomRule{
+		{ID: 1, ProfileID: 3, Type: "GEOSITE", Payload: "cn", Target: "REJECT"},
+	}
+	candidates := []CustomRule{
+		{ProfileID: 3, Type: "GEOSITE", Payload: "cn", Target: "DIRECT"},
+		{ProfileID: 3, Type: "MATCH", Payload: "-", Target: "代理"},
+	}
+
+	got, skipped := filterNewLocalizedRules(existing, candidates, 3)
+	if skipped != 1 {
+		t.Fatalf("skipped = %d, want 1", skipped)
+	}
+	if len(got) != 1 {
+		t.Fatalf("new rules length = %d, want 1", len(got))
+	}
+	if got[0].Type != "MATCH" || got[0].Payload != "-" || got[0].Target != "代理" {
+		t.Fatalf("unexpected imported rule: %+v", got[0])
+	}
+}
+
+func TestDecodeSubscriptionPlainContentAcceptsBase64Yaml(t *testing.T) {
+	raw := base64.StdEncoding.EncodeToString([]byte("rules:\n  - MATCH,代理\n"))
+	got, err := decodeSubscriptionPlainContent(raw)
+	if err != nil {
+		t.Fatalf("decodeSubscriptionPlainContent returned error: %v", err)
+	}
+	if !strings.Contains(got, "MATCH,代理") {
+		t.Fatalf("decoded content = %q, want MATCH rule", got)
+	}
+}
+
 func TestGenerateProfileSubTokenCarriesProfileID(t *testing.T) {
 	token := generateProfileSubToken(SubscriptionProfile{ID: 42})
 	decoded, err := base64.URLEncoding.DecodeString(token)

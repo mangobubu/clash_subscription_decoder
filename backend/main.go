@@ -100,6 +100,7 @@ func main() {
 	api.GET("/profiles/:id/sub-token", handleGetProfileSubToken)
 	api.POST("/profiles/:id/generate-sub-token", handleGenerateProfileSubToken)
 	api.POST("/profiles/:id/copy-rules", handleCopyProfileRules)
+	api.POST("/profiles/:id/localize-rules", handleLocalizeProfileRules)
 	api.GET("/subscription", handleGetSubscription)
 
 	// 注册解析节点链接接口
@@ -1050,6 +1051,183 @@ func handleCopyProfileRules(c *gin.Context) {
 
 	ReapplyRulesToProfile(targetProfile.ID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "规则复制成功", "data": gin.H{"copied": len(sourceRules), "total": len(mergedRules)}})
+}
+
+func parseSubscriptionRuleLine(ruleLine string, profileID uint) (CustomRule, bool) {
+	parts := strings.Split(strings.TrimSpace(ruleLine), ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	if len(parts) < 2 || parts[0] == "" {
+		return CustomRule{}, false
+	}
+
+	ruleType := strings.ToUpper(parts[0])
+	if ruleType == "MATCH" || ruleType == "FINAL" {
+		target := strings.Join(parts[1:], ",")
+		if strings.TrimSpace(target) == "" {
+			return CustomRule{}, false
+		}
+		return CustomRule{
+			ProfileID: profileID,
+			Type:      ruleType,
+			Payload:   "-",
+			Target:    target,
+		}, true
+	}
+
+	if len(parts) < 3 {
+		return CustomRule{}, false
+	}
+	targetStart := len(parts) - 1
+	if isRuleOptionSuffix(parts[len(parts)-1]) && len(parts) >= 4 {
+		targetStart = len(parts) - 2
+	}
+	payload := strings.Join(parts[1:targetStart], ",")
+	target := strings.Join(parts[targetStart:], ",")
+	if strings.TrimSpace(payload) == "" {
+		return CustomRule{}, false
+	}
+	if strings.TrimSpace(target) == "" {
+		return CustomRule{}, false
+	}
+	return CustomRule{
+		ProfileID: profileID,
+		Type:      ruleType,
+		Payload:   payload,
+		Target:    target,
+	}, true
+}
+
+func isRuleOptionSuffix(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "no-resolve":
+		return true
+	default:
+		return false
+	}
+}
+
+func extractProfileRulesFromSubscriptionContent(content string, profileID uint) ([]CustomRule, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(content), &root); err != nil {
+		return nil, fmt.Errorf("解析远程订阅 YAML 失败: %w", err)
+	}
+	if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("远程订阅不是标准 YAML 映射结构")
+	}
+
+	docNode := root.Content[0]
+	var rulesNode *yaml.Node
+	for i := 0; i < len(docNode.Content); i += 2 {
+		if docNode.Content[i].Value == "rules" {
+			rulesNode = docNode.Content[i+1]
+			break
+		}
+	}
+	if rulesNode == nil || rulesNode.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("远程订阅中没有可本地化的 rules")
+	}
+
+	rules := make([]CustomRule, 0, len(rulesNode.Content))
+	seen := make(map[string]bool)
+	for _, ruleNode := range rulesNode.Content {
+		if ruleNode.Kind != yaml.ScalarNode {
+			continue
+		}
+		rule, ok := parseSubscriptionRuleLine(ruleNode.Value, profileID)
+		if !ok {
+			continue
+		}
+		key := rule.Type + "\x00" + rule.Payload
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		rules = append(rules, rule)
+	}
+	if len(rules) == 0 {
+		return nil, fmt.Errorf("远程订阅中没有解析到可本地化的规则")
+	}
+	return rules, nil
+}
+
+func filterNewLocalizedRules(existingRules, candidateRules []CustomRule, profileID uint) ([]CustomRule, int) {
+	existingKeys := make(map[string]bool, len(existingRules))
+	for _, rule := range existingRules {
+		existingKeys[rule.Type+"\x00"+rule.Payload] = true
+	}
+
+	var newRules []CustomRule
+	skippedExisting := 0
+	for _, rule := range candidateRules {
+		key := rule.Type + "\x00" + rule.Payload
+		if existingKeys[key] {
+			skippedExisting++
+			continue
+		}
+		rule.ID = 0
+		rule.ProfileID = profileID
+		newRules = append(newRules, rule)
+		existingKeys[key] = true
+	}
+	return newRules, skippedExisting
+}
+
+func handleLocalizeProfileRules(c *gin.Context) {
+	profile, ok := getProfileFromParam(c)
+	if !ok {
+		return
+	}
+	if normalizeProfileSourceType(profile.SourceType) == profileSourceLocal {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "本地手动配置没有远程原始规则可本地化"})
+		return
+	}
+
+	if strings.TrimSpace(profile.RawResponse) == "" {
+		if err := refreshProfileCache(&profile); err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "刷新远程订阅失败", "error": err.Error()})
+			return
+		}
+	}
+
+	plainContent, err := decodeSubscriptionPlainContent(profile.RawResponse)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": 422, "message": "远程订阅解析失败", "error": err.Error()})
+		return
+	}
+
+	candidateRules, err := extractProfileRulesFromSubscriptionContent(plainContent, profile.ID)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": 422, "message": "远程规则解析失败", "error": err.Error()})
+		return
+	}
+
+	var existingRules []CustomRule
+	if err := DB.Where("profile_id = ?", profile.ID).Find(&existingRules).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取当前规则失败"})
+		return
+	}
+
+	newRules, skippedExisting := filterNewLocalizedRules(existingRules, candidateRules, profile.ID)
+	if len(newRules) > 0 {
+		if err := DB.Create(&newRules).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "写入本地化规则失败", "error": err.Error()})
+			return
+		}
+		ReapplyRulesToProfile(profile.ID)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "远程规则本地化完成",
+		"data": gin.H{
+			"parsed":           len(candidateRules),
+			"imported":         len(newRules),
+			"skipped_existing": skippedExisting,
+			"total":            len(existingRules) + len(newRules),
+		},
+	})
 }
 
 type BackupData struct {
@@ -2119,6 +2297,25 @@ func decodeAdaptiveBase64(input string) (string, error) {
 	return "", fmt.Errorf("无法使用任何标准 Base64 编码方式解码该文本")
 }
 
+func decodeSubscriptionPlainContent(rawResponse string) (string, error) {
+	decodedContent, err := decodeAdaptiveBase64(rawResponse)
+	if err != nil {
+		if looksLikePlainSubscriptionConfig(rawResponse) {
+			decodedContent = rawResponse
+		} else {
+			return "", fmt.Errorf("解析失败，且不包含常见配置文件特征，目标地址返回的内容格式不支持: %v", err)
+		}
+	}
+
+	lines := strings.Split(decodedContent, "\n")
+	for i, line := range lines {
+		if unescaped, err := url.PathUnescape(strings.TrimSpace(line)); err == nil {
+			lines[i] = unescaped
+		}
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
 // truncateString 截断字符串，防止返回大文件时撑爆网络通道
 func truncateString(str string, length int) string {
 	if len(str) <= length {
@@ -2195,25 +2392,10 @@ func autoPruneDialerProxyLoops(proxiesNode, proxyGroupsNode *yaml.Node) {
 
 // ProcessSubscriptionRawData 集中处理订阅的解码、明文转换及各种自定义规则的注入 (DRY 原则)
 func ProcessSubscriptionRawData(rawResponse string, profileID uint) (string, error) {
-	var decodedContent string
-	decoded, err := decodeAdaptiveBase64(rawResponse)
+	decodedContent, err := decodeSubscriptionPlainContent(rawResponse)
 	if err != nil {
-		if looksLikePlainSubscriptionConfig(rawResponse) {
-			decodedContent = rawResponse
-		} else {
-			return "", fmt.Errorf("解析失败，且不包含常见配置文件特征，目标地址返回的内容格式不支持: %v", err)
-		}
-	} else {
-		decodedContent = decoded
+		return "", err
 	}
-
-	lines := strings.Split(decodedContent, "\n")
-	for i, line := range lines {
-		if unescaped, err := url.PathUnescape(strings.TrimSpace(line)); err == nil {
-			lines[i] = unescaped
-		}
-	}
-	decodedContent = strings.Join(lines, "\n")
 
 	decodedContent = injectCustomNodes(decodedContent, profileID)
 	decodedContent = injectCustomGroups(decodedContent, profileID)
