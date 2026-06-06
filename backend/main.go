@@ -544,12 +544,16 @@ func decodeResponseFromProfile(profile SubscriptionProfile) DecodeResponse {
 }
 
 func profileListItem(profile SubscriptionProfile) gin.H {
+	localContent := profile.LocalContent
+	if normalizeProfileSourceType(profile.SourceType) == profileSourceLocal {
+		localContent = ""
+	}
 	return gin.H{
 		"id":            profile.ID,
 		"name":          profile.Name,
 		"source_type":   profile.SourceType,
 		"url":           profile.URL,
-		"local_content": profile.LocalContent,
+		"local_content": localContent,
 		"has_token":     profile.SubToken != "",
 		"created_at":    profile.CreatedAt,
 		"updated_at":    profile.UpdatedAt,
@@ -572,10 +576,8 @@ func validateProfileWriteRequest(req profileWriteRequest) (profileWriteRequest, 
 		req.LocalContent = ""
 		return req, nil
 	}
-	if strings.TrimSpace(req.LocalContent) == "" {
-		return req, fmt.Errorf("本地 YAML 配置内容不能为空")
-	}
 	req.URL = ""
+	req.LocalContent = ""
 	return req, nil
 }
 
@@ -583,11 +585,7 @@ type profileContentFetcher func(string) (string, error)
 
 func loadProfileRawContent(profile SubscriptionProfile, fetcher profileContentFetcher) (string, bool, error) {
 	if normalizeProfileSourceType(profile.SourceType) == profileSourceLocal {
-		content := profile.LocalContent
-		if strings.TrimSpace(content) == "" {
-			return "", false, fmt.Errorf("本地 YAML 配置内容为空")
-		}
-		return content, false, nil
+		return "", false, fmt.Errorf("本地手动配置不读取 YAML 内容，请通过手动节点、策略组和规则生成")
 	}
 
 	targetURL := strings.TrimSpace(profile.URL)
@@ -607,8 +605,186 @@ func looksLikePlainSubscriptionConfig(content string) bool {
 		strings.Contains(content, "servers:")
 }
 
+type manualProfileConfig struct {
+	MixedPort   int                      `yaml:"mixed-port"`
+	AllowLan    bool                     `yaml:"allow-lan"`
+	Mode        string                   `yaml:"mode"`
+	LogLevel    string                   `yaml:"log-level"`
+	GeodataMode bool                     `yaml:"geodata-mode"`
+	Proxies     []map[string]interface{} `yaml:"proxies"`
+	ProxyGroups []manualProxyGroupConfig `yaml:"proxy-groups"`
+	Rules       []string                 `yaml:"rules"`
+}
+
+type manualProxyGroupConfig struct {
+	Name    string   `yaml:"name"`
+	Type    string   `yaml:"type"`
+	Proxies []string `yaml:"proxies"`
+}
+
+// BuildManualProfileYAML 根据本地配置下手动维护的节点、策略组和规则生成 Clash/Mihomo YAML。
+func BuildManualProfileYAML(profileID uint) (string, error) {
+	nodes, err := GetCustomNodes(profileID)
+	if err != nil {
+		return "", fmt.Errorf("读取本地节点失败: %w", err)
+	}
+	groups, err := GetCustomProxyGroups(profileID)
+	if err != nil {
+		return "", fmt.Errorf("读取本地策略组失败: %w", err)
+	}
+	rules, err := GetCustomRules(profileID)
+	if err != nil {
+		return "", fmt.Errorf("读取本地规则失败: %w", err)
+	}
+
+	return buildManualProfileYAMLFromResources(nodes, groups, rules)
+}
+
+func buildManualProfileYAMLFromResources(nodes []CustomNode, groups []CustomProxyGroup, rules []CustomRule) (string, error) {
+	if len(nodes) == 0 {
+		return "", fmt.Errorf("本地手动配置至少需要先添加一个节点")
+	}
+
+	proxies := make([]map[string]interface{}, 0, len(nodes))
+	nodeNames := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		var configMap map[string]interface{}
+		if err := json.Unmarshal([]byte(node.Config), &configMap); err != nil {
+			return "", fmt.Errorf("解析节点 %s 配置失败: %w", node.Name, err)
+		}
+		if strings.TrimSpace(valueAsString(configMap["name"])) == "" {
+			configMap["name"] = node.Name
+		}
+		if strings.TrimSpace(valueAsString(configMap["type"])) == "" {
+			configMap["type"] = node.Type
+		}
+		if strings.TrimSpace(valueAsString(configMap["server"])) == "" {
+			configMap["server"] = node.Server
+		}
+		if strings.TrimSpace(valueAsString(configMap["port"])) == "" {
+			configMap["port"] = node.Port
+		}
+		proxies = append(proxies, configMap)
+		nodeNames = append(nodeNames, valueAsString(configMap["name"]))
+	}
+
+	proxyGroups := buildManualProxyGroups(groups, nodeNames, len(rules) == 0)
+	ruleLines := buildManualRuleLines(rules)
+	cfg := manualProfileConfig{
+		MixedPort:   manualDefaultMixedPort,
+		AllowLan:    true,
+		Mode:        "rule",
+		LogLevel:    "info",
+		GeodataMode: true,
+		Proxies:     proxies,
+		ProxyGroups: proxyGroups,
+		Rules:       ruleLines,
+	}
+
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("生成本地 YAML 失败: %w", err)
+	}
+	return string(out), nil
+}
+
+func buildManualProxyGroups(groups []CustomProxyGroup, nodeNames []string, needsDefaultProxyGroup bool) []manualProxyGroupConfig {
+	var proxyGroups []manualProxyGroupConfig
+	hasDefaultProxyGroup := false
+	for _, group := range groups {
+		groupConfig := manualProxyGroupConfig{
+			Name:    group.Name,
+			Type:    group.Type,
+			Proxies: expandManualGroupProxies(group, nodeNames),
+		}
+		if groupConfig.Name == manualDefaultProxyGroupName {
+			hasDefaultProxyGroup = true
+		}
+		proxyGroups = append(proxyGroups, groupConfig)
+	}
+
+	if len(proxyGroups) == 0 || (needsDefaultProxyGroup && !hasDefaultProxyGroup) {
+		proxyGroups = append([]manualProxyGroupConfig{defaultManualProxyGroup(nodeNames)}, proxyGroups...)
+	}
+	return proxyGroups
+}
+
+func expandManualGroupProxies(group CustomProxyGroup, nodeNames []string) []string {
+	proxiesList := group.GetProxiesList()
+	var expanded []string
+	var excludeRegex *regexp.Regexp
+	if group.Exclude != "" {
+		excludeRegex, _ = regexp.Compile(group.Exclude)
+	}
+
+	seen := make(map[string]bool)
+	appendProxy := func(proxy string) {
+		if proxy == "" {
+			return
+		}
+		if excludeRegex != nil && excludeRegex.MatchString(proxy) {
+			return
+		}
+		if !seen[proxy] {
+			seen[proxy] = true
+			expanded = append(expanded, proxy)
+		}
+	}
+
+	for _, proxy := range proxiesList {
+		if proxy == "[ALL_NODES]" {
+			for _, nodeName := range nodeNames {
+				appendProxy(nodeName)
+			}
+			continue
+		}
+		appendProxy(proxy)
+	}
+	return expanded
+}
+
+func defaultManualProxyGroup(nodeNames []string) manualProxyGroupConfig {
+	proxies := append([]string{}, nodeNames...)
+	proxies = append(proxies, manualDirectPolicyName)
+	return manualProxyGroupConfig{
+		Name:    manualDefaultProxyGroupName,
+		Type:    "select",
+		Proxies: proxies,
+	}
+}
+
+func buildManualRuleLines(rules []CustomRule) []string {
+	if len(rules) == 0 {
+		return []string{
+			defaultGeositeDirectRule,
+			defaultGeoIPDirectRule,
+			defaultProxyMatchRule,
+		}
+	}
+
+	lines := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		if rule.Payload == "-" || strings.TrimSpace(rule.Payload) == "" {
+			lines = append(lines, fmt.Sprintf("%s,%s", rule.Type, rule.Target))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s,%s,%s", rule.Type, rule.Payload, rule.Target))
+	}
+	return lines
+}
+
 func refreshProfileCache(profile *SubscriptionProfile) error {
-	rawContent, fetchedRemote, err := loadProfileRawContent(*profile, fetchURLContent)
+	if normalizeProfileSourceType(profile.SourceType) == profileSourceLocal {
+		manualYAML, err := BuildManualProfileYAML(profile.ID)
+		if err != nil {
+			return err
+		}
+		profile.RawResponse = manualYAML
+		profile.Decoded = manualYAML
+		return DB.Save(profile).Error
+	}
+
+	rawContent, _, err := loadProfileRawContent(*profile, fetchURLContent)
 	if err != nil {
 		return err
 	}
@@ -618,11 +794,7 @@ func refreshProfileCache(profile *SubscriptionProfile) error {
 		return err
 	}
 
-	if fetchedRemote {
-		profile.RawResponse = rawContent
-	} else {
-		profile.RawResponse = profile.LocalContent
-	}
+	profile.RawResponse = rawContent
 	profile.Decoded = decodedContent
 	return DB.Save(profile).Error
 }
@@ -670,13 +842,6 @@ func handleCreateProfile(c *gin.Context) {
 		return
 	}
 
-	if profile.SourceType == profileSourceLocal {
-		if err := refreshProfileCache(&profile); err != nil {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"code": 422, "message": "本地配置解析失败", "error": err.Error()})
-			return
-		}
-	}
-
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "配置创建成功", "data": profileListItem(profile)})
 }
 
@@ -710,13 +875,6 @@ func handleUpdateProfile(c *gin.Context) {
 	if err := DB.Save(&profile).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新配置失败", "error": err.Error()})
 		return
-	}
-
-	if profile.SourceType == profileSourceLocal {
-		if err := refreshProfileCache(&profile); err != nil {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"code": 422, "message": "本地配置解析失败", "error": err.Error()})
-			return
-		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "配置更新成功", "data": profileListItem(profile)})
@@ -2070,18 +2228,21 @@ func ReapplyRulesToProfile(profileID uint) {
 	if err := DB.First(&profile, profileID).Error; err != nil {
 		return
 	}
-	rawContent := profile.RawResponse
 	if profile.SourceType == profileSourceLocal {
-		rawContent = profile.LocalContent
+		if manualYAML, err := BuildManualProfileYAML(profile.ID); err == nil {
+			profile.RawResponse = manualYAML
+			profile.Decoded = manualYAML
+			DB.Save(&profile)
+		}
+		return
 	}
+
+	rawContent := profile.RawResponse
 	if strings.TrimSpace(rawContent) == "" {
 		return
 	}
 	if decodedContent, err := ProcessSubscriptionRawData(rawContent, profile.ID); err == nil {
 		profile.Decoded = decodedContent
-		if profile.SourceType == profileSourceLocal {
-			profile.RawResponse = profile.LocalContent
-		}
 		DB.Save(&profile)
 	}
 }

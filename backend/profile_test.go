@@ -6,25 +6,19 @@ import (
 	"testing"
 )
 
-func TestLoadProfileRawContentUsesLocalContentWithoutFetcher(t *testing.T) {
-	profile := SubscriptionProfile{
-		SourceType:   profileSourceLocal,
-		LocalContent: "proxies:\n  - name: local\n",
-	}
+func TestLoadProfileRawContentRejectsLocalContentWithoutFetcher(t *testing.T) {
+	profile := SubscriptionProfile{SourceType: profileSourceLocal}
 
-	got, fetchedRemote, err := loadProfileRawContent(profile, func(string) (string, error) {
+	_, fetchedRemote, err := loadProfileRawContent(profile, func(string) (string, error) {
 		t.Fatal("local profile must not call remote fetcher")
 		return "", nil
 	})
 
-	if err != nil {
-		t.Fatalf("loadProfileRawContent returned error: %v", err)
+	if err == nil {
+		t.Fatal("local profile should not be loaded from local_content")
 	}
 	if fetchedRemote {
 		t.Fatal("local profile unexpectedly marked as remote fetch")
-	}
-	if got != profile.LocalContent {
-		t.Fatalf("loadProfileRawContent() = %q, want %q", got, profile.LocalContent)
 	}
 }
 
@@ -93,6 +87,71 @@ func TestLooksLikePlainSubscriptionConfigAcceptsProviderOnlyYaml(t *testing.T) {
 	content := "proxy-providers:\n  provider-a:\n    type: http\nproxy-groups:\n  - name: PROXY\nrules:\n  - MATCH,PROXY\n"
 	if !looksLikePlainSubscriptionConfig(content) {
 		t.Fatal("provider-only Clash YAML was not recognized as plain config")
+	}
+}
+
+func TestBuildManualProfileYAMLFromResourcesRejectsEmptyNodes(t *testing.T) {
+	_, err := buildManualProfileYAMLFromResources(nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected local manual profile without nodes to fail")
+	}
+}
+
+func TestBuildManualProfileYAMLFromResourcesCreatesDefaults(t *testing.T) {
+	nodes := []CustomNode{
+		{
+			Name:   "香港 01",
+			Type:   "ss",
+			Server: "127.0.0.1",
+			Port:   8388,
+			Config: `{"name":"香港 01","type":"ss","server":"127.0.0.1","port":8388,"cipher":"aes-256-gcm","password":"pass"}`,
+		},
+	}
+
+	got, err := buildManualProfileYAMLFromResources(nodes, nil, nil)
+	if err != nil {
+		t.Fatalf("buildManualProfileYAMLFromResources returned error: %v", err)
+	}
+
+	for _, expected := range []string{
+		"proxies:",
+		"name: 香港 01",
+		"proxy-groups:",
+		"name: 代理",
+		"- DIRECT",
+		defaultGeositeDirectRule,
+		defaultGeoIPDirectRule,
+		defaultProxyMatchRule,
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("generated YAML missing %q:\n%s", expected, got)
+		}
+	}
+}
+
+func TestBuildManualProfileYAMLFromResourcesKeepsCustomRules(t *testing.T) {
+	nodes := []CustomNode{
+		{
+			Name:   "新加坡 01",
+			Type:   "socks5",
+			Server: "127.0.0.1",
+			Port:   1080,
+			Config: `{"name":"新加坡 01","type":"socks5","server":"127.0.0.1","port":1080}`,
+		},
+	}
+	rules := []CustomRule{
+		{Type: "DOMAIN-SUFFIX", Payload: "example.com", Target: "DIRECT"},
+	}
+
+	got, err := buildManualProfileYAMLFromResources(nodes, nil, rules)
+	if err != nil {
+		t.Fatalf("buildManualProfileYAMLFromResources returned error: %v", err)
+	}
+	if !strings.Contains(got, "DOMAIN-SUFFIX,example.com,DIRECT") {
+		t.Fatalf("generated YAML missing custom rule:\n%s", got)
+	}
+	if strings.Contains(got, defaultGeositeDirectRule) {
+		t.Fatalf("generated YAML should not include default rules when custom rules exist:\n%s", got)
 	}
 }
 

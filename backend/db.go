@@ -18,6 +18,18 @@ const (
 	profileSourceLocal  = "local"
 )
 
+const (
+	manualDefaultProxyGroupName = "代理"
+	manualDirectPolicyName      = "DIRECT"
+	manualDefaultMixedPort      = 7890
+)
+
+const (
+	defaultGeositeDirectRule = "GEOSITE,cn,DIRECT"
+	defaultGeoIPDirectRule   = "GEOIP,CN,DIRECT,no-resolve"
+	defaultProxyMatchRule    = "MATCH," + manualDefaultProxyGroupName
+)
+
 type Config struct {
 	Server struct {
 		Port int `toml:"port"`

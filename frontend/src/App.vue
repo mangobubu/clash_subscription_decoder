@@ -71,7 +71,6 @@ const profileForm = ref({
   name: "",
   source_type: "remote" as "remote" | "local",
   url: "",
-  local_content: "",
 });
 
 const currentProfile = computed(() =>
@@ -284,7 +283,6 @@ const openCreateProfileDialog = () => {
     name: "",
     source_type: "remote",
     url: "",
-    local_content: "",
   };
   profileDialogVisible.value = true;
 };
@@ -295,7 +293,6 @@ const openEditProfileDialog = (profile: SubscriptionProfile) => {
     name: profile.name,
     source_type: profile.source_type,
     url: profile.url || "",
-    local_content: profile.local_content || "",
   };
   profileDialogVisible.value = true;
 };
@@ -309,14 +306,9 @@ const saveProfile = async () => {
     ElMessage.warning("请输入远程订阅地址");
     return;
   }
-  if (profileForm.value.source_type === "local" && !profileForm.value.local_content.trim()) {
-    ElMessage.warning("请输入本地 YAML 配置内容");
-    return;
-  }
-
   isSubmittingProfile.value = true;
   try {
-    const payload = { ...profileForm.value };
+    const payload = { ...profileForm.value, local_content: "" };
     const res = editingProfileId.value
       ? await axios.put(buildBackendUrl(`/api/profiles/${editingProfileId.value}`), payload)
       : await axios.post(buildBackendUrl("/api/profiles"), payload);
@@ -483,7 +475,7 @@ interface ProxyNode {
 // 快速填入 Mock 地址
 const handleQuickMock = () => {
   if (currentProfile.value?.source_type === "local") {
-    ElMessage.warning("本地配置不需要订阅地址，请编辑 YAML 内容");
+    ElMessage.warning("本地手动配置不需要订阅地址，请添加节点后刷新");
     return;
   }
   inputUrl.value = "mock.clash.local/sub";
@@ -1127,6 +1119,7 @@ const ruleTypes = [
   "DOMAIN",
   "IP-CIDR",
   "IP-CIDR6",
+  "GEOSITE",
   "GEOIP",
   "MATCH",
   "PROCESS-NAME",
@@ -1560,6 +1553,17 @@ const submitChangePassword = async () => {
 	              刷新当前
 	            </el-button>
 	          </div>
+	          <div v-if="currentProfile?.source_type === 'local'" class="manual-config-actions">
+	            <el-button type="primary" plain icon="Plus" @click="openNodeDialog">
+	              添加节点
+	            </el-button>
+	            <el-button type="success" plain icon="Plus" @click="openGroupDialog">
+	              添加代理组
+	            </el-button>
+	            <el-button type="warning" plain icon="Plus" @click="openRuleDialog">
+	              添加规则
+	            </el-button>
+	          </div>
 	        </div>
 
 	        <div v-if="profiles.length > 0" class="profiles-grid">
@@ -1574,7 +1578,7 @@ const submitChangePassword = async () => {
 	            <div class="profile-card-main">
 	              <span class="profile-name">{{ profile.name }}</span>
 	              <el-tag size="small" :type="profile.source_type === 'local' ? 'success' : 'primary'">
-	                {{ profile.source_type === 'local' ? '本地 YAML' : '远程订阅' }}
+	                {{ profile.source_type === 'local' ? '本地手动' : '远程订阅' }}
 	              </el-tag>
 	            </div>
 	            <div class="profile-meta">
@@ -1590,17 +1594,17 @@ const submitChangePassword = async () => {
 	            </div>
 	          </button>
 	        </div>
-	        <el-empty v-else description="暂无配置，请先新增一个远程订阅或本地 YAML 配置" />
+	        <el-empty v-else description="暂无配置，请先新增一个远程订阅或本地手动配置" />
 	      </section>
 
 	      <!-- 控制卡片面板 -->
 	      <section class="control-panel glass-card">
 	        <h2 class="section-title">
-	          {{ currentProfile?.source_type === 'local' ? '本地 YAML 配置预览' : '自适应 Base64 地址获取器' }}
+	          {{ currentProfile?.source_type === 'local' ? '本地手动配置预览' : '自适应 Base64 地址获取器' }}
 	        </h2>
 	        <p class="section-desc">
 	          <template v-if="currentProfile?.source_type === 'local'">
-	            本地配置不请求上游订阅，保存后会直接基于完整 YAML 生成各客户端配置地址。
+	            本地配置不请求上游订阅，系统会根据你手动添加的节点、代理组和规则自动生成 YAML。
 	          </template>
 	          <template v-else>
 	            输入任意提供 Base64 编码数据的订阅地址或接口
@@ -1631,7 +1635,7 @@ const submitChangePassword = async () => {
 	              :loading="isLoading"
 	              class="action-btn"
 	            >
-	              {{ currentProfile?.source_type === 'local' ? '刷新本地配置' : '刷新订阅' }}
+	              {{ currentProfile?.source_type === 'local' ? '生成本地订阅' : '刷新订阅' }}
 	            </el-button>
 	            <el-button
 	              v-else
@@ -2149,7 +2153,7 @@ const submitChangePassword = async () => {
 	            v-model="profileForm.source_type"
 	            :options="[
 	              { label: '远程订阅', value: 'remote' },
-	              { label: '本地 YAML', value: 'local' },
+	              { label: '本地手动', value: 'local' },
 	            ]"
 	          />
 	        </el-form-item>
@@ -2160,13 +2164,12 @@ const submitChangePassword = async () => {
 	            clearable
 	          />
 	        </el-form-item>
-	        <el-form-item v-else label="完整 Clash/Mihomo YAML">
-	          <el-input
-	            v-model="profileForm.local_content"
-	            type="textarea"
-	            :rows="14"
-	            placeholder="请粘贴完整 YAML 配置内容"
-	            class="profile-yaml-input"
+	        <el-form-item v-else label="本地手动配置说明">
+	          <el-alert
+	            type="success"
+	            show-icon
+	            :closable="false"
+	            title="创建后请在当前配置下手动添加节点、代理组和规则；系统会自动生成 Clash/Mihomo YAML 订阅。"
 	          />
 	        </el-form-item>
 	      </el-form>
@@ -2873,10 +2876,6 @@ const submitChangePassword = async () => {
   margin-top: 8px;
 }
 
-.profile-yaml-input :deep(.el-textarea__inner) {
-  font-family: "Fira Code", "Menlo", monospace;
-}
-
 .section-title {
   margin: 0 0 10px 0;
   font-size: 22px;
@@ -2909,6 +2908,12 @@ const submitChangePassword = async () => {
 .button-group {
   display: flex;
   gap: 14px;
+}
+
+.manual-config-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .action-btn {
@@ -3034,7 +3039,9 @@ const submitChangePassword = async () => {
   }
 
   .profiles-actions,
-  .profiles-actions :deep(.el-button) {
+  .profiles-actions :deep(.el-button),
+  .manual-config-actions,
+  .manual-config-actions :deep(.el-button) {
     width: 100%;
   }
 
