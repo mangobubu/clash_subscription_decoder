@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 	"gorm.io/driver/postgres"
@@ -28,6 +29,11 @@ const (
 	defaultGeositeDirectRule = "GEOSITE,cn,DIRECT"
 	defaultGeoIPDirectRule   = "GEOIP,CN,DIRECT,no-resolve"
 	defaultProxyMatchRule    = "MATCH," + manualDefaultProxyGroupName
+)
+
+const (
+	resourceOrderTypeNodes  = "nodes"
+	resourceOrderTypeGroups = "groups"
 )
 
 type Config struct {
@@ -92,6 +98,15 @@ type CustomRule struct {
 	Payload   string `gorm:"uniqueIndex:idx_profile_type_payload;not null"` // 如 google.com
 	Target    string `gorm:"not null"`                                      // 如 PROXY
 	CreatedAt int64  `gorm:"autoCreateTime"`
+}
+
+type ProfileResourceOrder struct {
+	ID           uint   `gorm:"primarykey"`
+	ProfileID    uint   `gorm:"not null;uniqueIndex:idx_profile_resource_order"`
+	ResourceType string `gorm:"size:32;not null;uniqueIndex:idx_profile_resource_order"`
+	Name         string `gorm:"size:512;not null;uniqueIndex:idx_profile_resource_order"`
+	SortOrder    int    `gorm:"not null;index"`
+	CreatedAt    int64  `gorm:"autoCreateTime"`
 }
 
 type SubscriptionProfile struct {
@@ -211,6 +226,7 @@ func initDB() {
 		&CustomProxyGroup{},
 		&CustomNode{},
 		&CustomRule{},
+		&ProfileResourceOrder{},
 		&Subscription{},
 	)
 	if err != nil {
@@ -283,10 +299,72 @@ func assignLegacyResourcesToProfile(db *gorm.DB, profileID uint) error {
 	return nil
 }
 
+func isValidResourceOrderType(resourceType string) bool {
+	return resourceType == resourceOrderTypeNodes || resourceType == resourceOrderTypeGroups
+}
+
+func cleanResourceOrderNames(names []string) []string {
+	cleaned := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		cleaned = append(cleaned, name)
+	}
+	return cleaned
+}
+
+func SaveProfileResourceOrder(profileID uint, resourceType string, names []string) error {
+	if !isValidResourceOrderType(resourceType) {
+		return fmt.Errorf("资源类型不支持")
+	}
+	cleanedNames := cleanResourceOrderNames(names)
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("profile_id = ? AND resource_type = ?", profileID, resourceType).Delete(&ProfileResourceOrder{}).Error; err != nil {
+			return err
+		}
+		if len(cleanedNames) == 0 {
+			return nil
+		}
+
+		orders := make([]ProfileResourceOrder, 0, len(cleanedNames))
+		for idx, name := range cleanedNames {
+			orders = append(orders, ProfileResourceOrder{
+				ProfileID:    profileID,
+				ResourceType: resourceType,
+				Name:         name,
+				SortOrder:    idx,
+			})
+		}
+		return tx.Create(&orders).Error
+	})
+}
+
+func GetProfileResourceOrderNames(profileID uint, resourceType string) ([]string, error) {
+	var orders []ProfileResourceOrder
+	err := DB.Where("profile_id = ? AND resource_type = ?", profileID, resourceType).
+		Order("sort_order asc, id asc").
+		Find(&orders).Error
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(orders))
+	for _, order := range orders {
+		if name := strings.TrimSpace(order.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
 // GetCustomProxyGroups returns all custom proxy groups
 func GetCustomProxyGroups(profileID uint) ([]CustomProxyGroup, error) {
 	var groups []CustomProxyGroup
-	err := DB.Where("profile_id = ?", profileID).Find(&groups).Error
+	err := DB.Where("profile_id = ?", profileID).Order("created_at asc, id asc").Find(&groups).Error
 	return groups, err
 }
 
@@ -302,7 +380,7 @@ func (g *CustomProxyGroup) GetProxiesList() []string {
 // GetCustomNodes returns all custom proxy nodes
 func GetCustomNodes(profileID uint) ([]CustomNode, error) {
 	var nodes []CustomNode
-	err := DB.Where("profile_id = ?", profileID).Find(&nodes).Error
+	err := DB.Where("profile_id = ?", profileID).Order("created_at asc, id asc").Find(&nodes).Error
 	return nodes, err
 }
 

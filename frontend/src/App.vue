@@ -490,6 +490,13 @@ interface ProxyNode {
   details: Record<string, any>;
 }
 
+type SortResourceType = "nodes" | "groups";
+
+interface DragSortState {
+  resourceType: SortResourceType;
+  fromIndex: number;
+}
+
 // 快速填入 Mock 地址
 const handleQuickMock = () => {
   if (currentProfile.value?.source_type === "local") {
@@ -593,6 +600,163 @@ const proxyGroups = computed<any[]>(() => {
   if (!parsedConfig.value || !parsedConfig.value["proxy-groups"]) return [];
   return parsedConfig.value["proxy-groups"];
 });
+
+const draggableNodes = ref<ProxyNode[]>([]);
+const draggableGroups = ref<any[]>([]);
+const dragSortState = ref<DragSortState | null>(null);
+const dragOverState = ref<DragSortState | null>(null);
+const isSavingNodeOrder = ref(false);
+const isSavingGroupOrder = ref(false);
+
+watch(
+  parsedNodes,
+  (nodes) => {
+    draggableNodes.value = nodes.map((node) => ({ ...node }));
+  },
+  { immediate: true },
+);
+
+watch(
+  proxyGroups,
+  (groups) => {
+    draggableGroups.value = groups.map((group) => ({
+      ...group,
+      proxies: Array.isArray(group.proxies) ? [...group.proxies] : [],
+    }));
+  },
+  { immediate: true },
+);
+
+const isSavingResourceOrder = (resourceType: SortResourceType) =>
+  resourceType === "nodes" ? isSavingNodeOrder.value : isSavingGroupOrder.value;
+
+const setSavingResourceOrder = (resourceType: SortResourceType, saving: boolean) => {
+  if (resourceType === "nodes") {
+    isSavingNodeOrder.value = saving;
+    return;
+  }
+  isSavingGroupOrder.value = saving;
+};
+
+const resourceOrderItems = (resourceType: SortResourceType) =>
+  resourceType === "nodes" ? draggableNodes.value : draggableGroups.value;
+
+const setResourceOrderItems = (resourceType: SortResourceType, items: any[]) => {
+  if (resourceType === "nodes") {
+    draggableNodes.value = items as ProxyNode[];
+    return;
+  }
+  draggableGroups.value = items;
+};
+
+const handleSortDragStart = (
+  event: DragEvent,
+  resourceType: SortResourceType,
+  fromIndex: number,
+) => {
+  if (isSavingResourceOrder(resourceType)) {
+    event.preventDefault();
+    return;
+  }
+  dragSortState.value = { resourceType, fromIndex };
+  event.dataTransfer?.setData("text/plain", `${resourceType}:${fromIndex}`);
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+  }
+};
+
+const handleSortDragOver = (
+  event: DragEvent,
+  resourceType: SortResourceType,
+  index: number,
+) => {
+  if (
+    !dragSortState.value ||
+    dragSortState.value.resourceType !== resourceType ||
+    isSavingResourceOrder(resourceType)
+  ) {
+    return;
+  }
+  event.preventDefault();
+  dragOverState.value = { resourceType, fromIndex: index };
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "move";
+  }
+};
+
+const handleSortDrop = async (
+  event: DragEvent,
+  resourceType: SortResourceType,
+  toIndex: number,
+) => {
+  event.preventDefault();
+  const state = dragSortState.value;
+  dragSortState.value = null;
+  dragOverState.value = null;
+  if (!state || state.resourceType !== resourceType || isSavingResourceOrder(resourceType)) {
+    return;
+  }
+  await reorderDisplayItems(resourceType, state.fromIndex, toIndex);
+};
+
+const handleSortDragEnd = () => {
+  dragSortState.value = null;
+  dragOverState.value = null;
+};
+
+const isDragOverItem = (resourceType: SortResourceType, index: number) =>
+  dragOverState.value?.resourceType === resourceType &&
+  dragOverState.value?.fromIndex === index;
+
+const reorderDisplayItems = async (
+  resourceType: SortResourceType,
+  fromIndex: number,
+  toIndex: number,
+) => {
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
+
+  const currentItems = resourceOrderItems(resourceType);
+  if (
+    fromIndex === toIndex ||
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= currentItems.length ||
+    toIndex >= currentItems.length
+  ) {
+    return;
+  }
+
+  const previousItems = currentItems.map((item) => ({ ...item }));
+  const nextItems = currentItems.map((item) => ({ ...item }));
+  const [moved] = nextItems.splice(fromIndex, 1);
+  nextItems.splice(toIndex, 0, moved);
+  setResourceOrderItems(resourceType, nextItems);
+  setSavingResourceOrder(resourceType, true);
+
+  try {
+    const names = nextItems.map((item) => item.name).filter(Boolean);
+    const res = await axios.put(profileScopedUrl("/api/resource-orders"), {
+      profile_id: activeProfileId.value,
+      resource_type: resourceType,
+      names,
+    });
+    if (res.data.code !== 200) {
+      throw new Error(res.data.message || "排序保存失败");
+    }
+    ElMessage.success(resourceType === "nodes" ? "节点排序已保存" : "代理组排序已保存");
+    await loadSubscription({ preferredTab: resourceType === "nodes" ? "nodes" : "groups" });
+  } catch (error: any) {
+    setResourceOrderItems(resourceType, previousItems);
+    ElMessage.error(
+      "排序保存失败: " + (error.response?.data?.message || error.message),
+    );
+  } finally {
+    setSavingResourceOrder(resourceType, false);
+  }
+};
 
 // 规则搜索关键字
 const ruleSearchQuery = ref("");
@@ -1820,10 +1984,10 @@ const submitChangePassword = async () => {
           <!-- 页签切换区 -->
           <el-tabs v-model="activeTab" class="custom-tabs">
             <!-- 节点预览页签 -->
-            <el-tab-pane name="nodes" v-if="parsedNodes.length > 0">
+            <el-tab-pane name="nodes" v-if="draggableNodes.length > 0">
               <template #label>
                 <span class="tab-label"
-                  >⚡ 节点解析概览 ({{ parsedNodes.length }})</span
+                  >⚡ 节点解析概览 ({{ draggableNodes.length }})</span
                 >
               </template>
               <div
@@ -1831,9 +1995,14 @@ const submitChangePassword = async () => {
                 style="
                   display: flex;
                   justify-content: flex-end;
+                  align-items: center;
+                  gap: 10px;
                   margin-bottom: 16px;
                 "
               >
+                <el-tag v-if="isSavingNodeOrder" type="warning" effect="dark">
+                  排序保存中...
+                </el-tag>
                 <el-button
                   type="success"
                   effect="dark"
@@ -1846,9 +2015,17 @@ const submitChangePassword = async () => {
               </div>
               <div class="nodes-grid">
                 <div
-                  v-for="(node, idx) in parsedNodes"
-                  :key="idx"
-                  class="node-card"
+                  v-for="(node, idx) in draggableNodes"
+                  :key="node.name || idx"
+                  :class="[
+                    'node-card',
+                    {
+                      'is-drag-over': isDragOverItem('nodes', idx),
+                      'is-order-saving': isSavingNodeOrder,
+                    },
+                  ]"
+                  @dragover="handleSortDragOver($event, 'nodes', idx)"
+                  @drop="handleSortDrop($event, 'nodes', idx)"
                 >
                   <div class="node-card-header">
                     <div
@@ -1859,6 +2036,16 @@ const submitChangePassword = async () => {
                         flex: 1;
                       "
                     >
+                      <span
+                        class="drag-handle"
+                        :class="{ disabled: isSavingNodeOrder }"
+                        :draggable="!isSavingNodeOrder"
+                        title="拖拽排序"
+                        @dragstart="handleSortDragStart($event, 'nodes', idx)"
+                        @dragend="handleSortDragEnd"
+                      >
+                        ☰
+                      </span>
                       <span class="node-flag">{{
                         getFlagEmoji(node.name)
                       }}</span>
@@ -1919,10 +2106,10 @@ const submitChangePassword = async () => {
             </el-tab-pane>
 
             <!-- 代理组页签 -->
-            <el-tab-pane name="groups" v-if="proxyGroups.length > 0">
+            <el-tab-pane name="groups" v-if="draggableGroups.length > 0">
               <template #label>
                 <span class="tab-label"
-                  >🗂️ 代理组策略 ({{ proxyGroups.length }})</span
+                  >🗂️ 代理组策略 ({{ draggableGroups.length }})</span
                 >
               </template>
 
@@ -1931,9 +2118,14 @@ const submitChangePassword = async () => {
                 style="
                   display: flex;
                   justify-content: flex-end;
+                  align-items: center;
+                  gap: 10px;
                   margin-bottom: 16px;
                 "
               >
+                <el-tag v-if="isSavingGroupOrder" type="warning" effect="dark">
+                  排序保存中...
+                </el-tag>
                 <el-button
                   type="primary"
                   effect="dark"
@@ -1947,9 +2139,17 @@ const submitChangePassword = async () => {
 
               <div class="groups-grid">
                 <div
-                  v-for="(group, idx) in proxyGroups"
-                  :key="idx"
-                  class="group-card"
+                  v-for="(group, idx) in draggableGroups"
+                  :key="group.name || idx"
+                  :class="[
+                    'group-card',
+                    {
+                      'is-drag-over': isDragOverItem('groups', idx),
+                      'is-order-saving': isSavingGroupOrder,
+                    },
+                  ]"
+                  @dragover="handleSortDragOver($event, 'groups', idx)"
+                  @drop="handleSortDrop($event, 'groups', idx)"
                 >
                   <div class="group-card-header">
                     <div
@@ -1961,6 +2161,16 @@ const submitChangePassword = async () => {
                         gap: 8px;
                       "
                     >
+                      <span
+                        class="drag-handle"
+                        :class="{ disabled: isSavingGroupOrder }"
+                        :draggable="!isSavingGroupOrder"
+                        title="拖拽排序"
+                        @dragstart="handleSortDragStart($event, 'groups', idx)"
+                        @dragend="handleSortDragEnd"
+                      >
+                        ☰
+                      </span>
                       <span class="group-name">{{ group.name }}</span>
                       <el-tag
                         size="small"
@@ -3234,12 +3444,54 @@ const submitChangePassword = async () => {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
 
+.node-card.is-drag-over,
+.group-card.is-drag-over {
+  border-color: rgba(56, 189, 248, 0.65);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.25), 0 10px 26px rgba(0, 0, 0, 0.28);
+}
+
+.node-card.is-order-saving,
+.group-card.is-order-saving {
+  opacity: 0.78;
+}
+
 .node-card-header {
   display: flex;
   align-items: center;
   gap: 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   padding-bottom: 8px;
+}
+
+.drag-handle {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  cursor: grab;
+  user-select: none;
+  line-height: 1;
+}
+
+.drag-handle:hover {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.drag-handle.disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .node-flag {

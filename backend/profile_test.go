@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoadProfileRawContentRejectsLocalContentWithoutFetcher(t *testing.T) {
@@ -155,6 +157,86 @@ func TestBuildManualProfileYAMLFromResourcesKeepsCustomRules(t *testing.T) {
 	}
 }
 
+func TestApplyResourceOrderToYAMLContentOrdersNodes(t *testing.T) {
+	content := `proxies:
+  - name: 节点 A
+    type: ss
+  - name: 节点 B
+    type: ss
+  - name: 节点 C
+    type: ss
+proxy-groups: []
+`
+
+	got := applyResourceOrderToYAMLContent(content, resourceOrderTypeNodes, []string{"节点 C", "不存在", "节点 A", "节点 C", ""})
+	names := yamlSequenceNames(t, got, "proxies")
+	assertStringSliceEqual(t, names, []string{"节点 C", "节点 A", "节点 B"})
+}
+
+func TestApplyResourceOrderToYAMLContentOrdersGroups(t *testing.T) {
+	content := `proxies: []
+proxy-groups:
+  - name: 自动选择
+    type: url-test
+    proxies: []
+  - name: 手动选择
+    type: select
+    proxies: []
+  - name: 兜底策略
+    type: fallback
+    proxies: []
+`
+
+	got := applyResourceOrderToYAMLContent(content, resourceOrderTypeGroups, []string{"兜底策略", "自动选择"})
+	names := yamlSequenceNames(t, got, "proxy-groups")
+	assertStringSliceEqual(t, names, []string{"兜底策略", "自动选择", "手动选择"})
+}
+
+func TestBuildManualProfileYAMLFromResourcesKeepsSavedResourceOrder(t *testing.T) {
+	nodes := []CustomNode{
+		{
+			Name:   "香港 01",
+			Type:   "ss",
+			Server: "127.0.0.1",
+			Port:   8388,
+			Config: `{"name":"香港 01","type":"ss","server":"127.0.0.1","port":8388}`,
+		},
+		{
+			Name:   "新加坡 02",
+			Type:   "socks5",
+			Server: "127.0.0.2",
+			Port:   1080,
+			Config: `{"name":"新加坡 02","type":"socks5","server":"127.0.0.2","port":1080}`,
+		},
+		{
+			Name:   "美国 03",
+			Type:   "trojan",
+			Server: "127.0.0.3",
+			Port:   443,
+			Config: `{"name":"美国 03","type":"trojan","server":"127.0.0.3","port":443}`,
+		},
+	}
+	groups := []CustomProxyGroup{
+		{Name: "手动选择", Type: "select", Proxies: `["[ALL_NODES]"]`},
+		{Name: "自动选择", Type: "url-test", Proxies: `["[ALL_NODES]"]`},
+		{Name: "兜底策略", Type: "fallback", Proxies: `["[ALL_NODES]"]`},
+	}
+	rules := []CustomRule{{Type: "MATCH", Payload: "-", Target: "手动选择"}}
+
+	orderedNodes := applyCustomNodeOrder(nodes, []string{"新加坡 02", "香港 01"})
+	orderedGroups := applyCustomGroupOrder(groups, []string{"自动选择", "手动选择"})
+	got, err := buildManualProfileYAMLFromResources(orderedNodes, orderedGroups, rules)
+	if err != nil {
+		t.Fatalf("buildManualProfileYAMLFromResources returned error: %v", err)
+	}
+
+	assertStringSliceEqual(t, yamlSequenceNames(t, got, "proxies"), []string{"新加坡 02", "香港 01", "美国 03"})
+	assertStringSliceEqual(t, yamlSequenceNames(t, got, "proxy-groups"), []string{"自动选择", "手动选择", "兜底策略"})
+	if !strings.Contains(got, "MATCH,手动选择") {
+		t.Fatalf("generated YAML missing custom MATCH rule:\n%s", got)
+	}
+}
+
 func TestExtractProfileRulesFromSubscriptionContentParsesClashRules(t *testing.T) {
 	content := `proxies: []
 proxy-groups: []
@@ -239,5 +321,40 @@ func TestGenerateProfileSubTokenCarriesProfileID(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(decoded), "profile:42|") {
 		t.Fatalf("decoded token = %q, want profile id prefix", decoded)
+	}
+}
+
+func yamlSequenceNames(t *testing.T, content string, key string) []string {
+	t.Helper()
+
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(content), &root); err != nil {
+		t.Fatalf("yaml.Unmarshal returned error: %v\n%s", err, content)
+	}
+	if len(root.Content) == 0 {
+		t.Fatalf("YAML content is empty:\n%s", content)
+	}
+
+	seq := findTopLevelSequenceNode(root.Content[0], key)
+	if seq == nil {
+		t.Fatalf("YAML missing sequence %q:\n%s", key, content)
+	}
+
+	names := make([]string, 0, len(seq.Content))
+	for _, item := range seq.Content {
+		names = append(names, yamlMappingName(item))
+	}
+	return names
+}
+
+func assertStringSliceEqual(t *testing.T, got []string, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("slice length = %d, want %d; got=%v want=%v", len(got), len(want), got, want)
+	}
+	for idx := range want {
+		if got[idx] != want[idx] {
+			t.Fatalf("slice[%d] = %q, want %q; got=%v want=%v", idx, got[idx], want[idx], got, want)
+		}
 	}
 }

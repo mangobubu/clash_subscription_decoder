@@ -102,6 +102,7 @@ func main() {
 	api.POST("/profiles/:id/copy-rules", handleCopyProfileRules)
 	api.POST("/profiles/:id/localize-rules", handleLocalizeProfileRules)
 	api.GET("/subscription", handleGetSubscription)
+	api.PUT("/resource-orders", handleUpdateResourceOrder)
 
 	// 注册解析节点链接接口
 	api.POST("/parse-link", handleParseLink)
@@ -629,10 +630,12 @@ func BuildManualProfileYAML(profileID uint) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("读取本地节点失败: %w", err)
 	}
+	nodes = applyCustomNodeOrder(nodes, loadProfileResourceOrderNames(profileID, resourceOrderTypeNodes))
 	groups, err := GetCustomProxyGroups(profileID)
 	if err != nil {
 		return "", fmt.Errorf("读取本地策略组失败: %w", err)
 	}
+	groups = applyCustomGroupOrder(groups, loadProfileResourceOrderNames(profileID, resourceOrderTypeGroups))
 	rules, err := GetCustomRules(profileID)
 	if err != nil {
 		return "", fmt.Errorf("读取本地规则失败: %w", err)
@@ -687,6 +690,69 @@ func buildManualProfileYAMLFromResources(nodes []CustomNode, groups []CustomProx
 		return "", fmt.Errorf("生成本地 YAML 失败: %w", err)
 	}
 	return string(out), nil
+}
+
+func loadProfileResourceOrderNames(profileID uint, resourceType string) []string {
+	names, err := GetProfileResourceOrderNames(profileID, resourceType)
+	if err != nil {
+		log.Printf("load resource order warning: profile=%d type=%s err=%v", profileID, resourceType, err)
+		return nil
+	}
+	return names
+}
+
+func applyCustomNodeOrder(nodes []CustomNode, orderNames []string) []CustomNode {
+	cleanedOrder := cleanResourceOrderNames(orderNames)
+	if len(cleanedOrder) == 0 || len(nodes) == 0 {
+		return nodes
+	}
+
+	byName := make(map[string][]CustomNode, len(nodes))
+	for _, node := range nodes {
+		byName[node.Name] = append(byName[node.Name], node)
+	}
+
+	ordered := make([]CustomNode, 0, len(nodes))
+	usedNames := make(map[string]bool, len(cleanedOrder))
+	for _, name := range cleanedOrder {
+		if matched, ok := byName[name]; ok {
+			ordered = append(ordered, matched...)
+			usedNames[name] = true
+		}
+	}
+	for _, node := range nodes {
+		if !usedNames[node.Name] {
+			ordered = append(ordered, node)
+		}
+	}
+	return ordered
+}
+
+func applyCustomGroupOrder(groups []CustomProxyGroup, orderNames []string) []CustomProxyGroup {
+	cleanedOrder := cleanResourceOrderNames(orderNames)
+	if len(cleanedOrder) == 0 || len(groups) == 0 {
+		return groups
+	}
+
+	byName := make(map[string][]CustomProxyGroup, len(groups))
+	for _, group := range groups {
+		byName[group.Name] = append(byName[group.Name], group)
+	}
+
+	ordered := make([]CustomProxyGroup, 0, len(groups))
+	usedNames := make(map[string]bool, len(cleanedOrder))
+	for _, name := range cleanedOrder {
+		if matched, ok := byName[name]; ok {
+			ordered = append(ordered, matched...)
+			usedNames[name] = true
+		}
+	}
+	for _, group := range groups {
+		if !usedNames[group.Name] {
+			ordered = append(ordered, group)
+		}
+	}
+	return ordered
 }
 
 func buildManualProxyGroups(groups []CustomProxyGroup, nodeNames []string, needsDefaultProxyGroup bool) []manualProxyGroupConfig {
@@ -902,6 +968,9 @@ func handleDeleteProfile(c *gin.Context) {
 			return err
 		}
 		if err := tx.Where("profile_id = ?", profile.ID).Delete(&CustomRule{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("profile_id = ?", profile.ID).Delete(&ProfileResourceOrder{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&profile).Error
@@ -1469,6 +1538,45 @@ func handleGetCustomGroups(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": groups})
 }
 
+func handleUpdateResourceOrder(c *gin.Context) {
+	var req struct {
+		ProfileID    uint     `json:"profile_id"`
+		ResourceType string   `json:"resource_type" binding:"required"`
+		Names        []string `json:"names"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+
+	req.ResourceType = strings.TrimSpace(req.ResourceType)
+	if !isValidResourceOrderType(req.ResourceType) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "资源类型不支持"})
+		return
+	}
+
+	profileID, ok := resolveRequestProfileID(c, req.ProfileID)
+	if !ok {
+		return
+	}
+
+	cleanedNames := cleanResourceOrderNames(req.Names)
+	if err := SaveProfileResourceOrder(profileID, req.ResourceType, cleanedNames); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存排序失败", "error": err.Error()})
+		return
+	}
+
+	ReapplyRulesToProfile(profileID)
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "排序保存成功",
+		"data": gin.H{
+			"resource_type": req.ResourceType,
+			"names":         cleanedNames,
+		},
+	})
+}
+
 // handleCreateCustomGroup 创建新策略组
 func handleCreateCustomGroup(c *gin.Context) {
 	var req struct {
@@ -1821,6 +1929,7 @@ func injectCustomNodes(yamlContent string, profileID uint) string {
 
 	// 获取数据库里的自定义节点并无损注入
 	customNodes, _ := GetCustomNodes(profileID)
+	var customProxyNodes []*yaml.Node
 	for _, cn := range customNodes {
 		var configMap map[string]interface{}
 		if err := json.Unmarshal([]byte(cn.Config), &configMap); err != nil {
@@ -1842,8 +1951,7 @@ func injectCustomNodes(yamlContent string, profileID uint) string {
 		}
 
 		if len(tempRoot.Content) > 0 && len(tempRoot.Content[0].Content) > 0 {
-			// 将生成的节点对象注入到 proxiesNode 的最开头，使其显示在最前面
-			proxiesNode.Content = append([]*yaml.Node{tempRoot.Content[0]}, proxiesNode.Content...)
+			customProxyNodes = append(customProxyNodes, tempRoot.Content[0])
 		}
 
 		// 智能感知：自动将该自定义节点注入到订阅原有的各个代理组的 proxies 列表中
@@ -1866,6 +1974,11 @@ func injectCustomNodes(yamlContent string, profileID uint) string {
 				}
 			}
 		}
+	}
+
+	if len(customProxyNodes) > 0 {
+		// 自定义节点保持创建顺序前置，显式排序记录会在后续统一覆盖。
+		proxiesNode.Content = append(customProxyNodes, proxiesNode.Content...)
 	}
 
 	// 转回 YAML 字符串
@@ -1988,6 +2101,108 @@ func injectCustomGroups(yamlContent string, profileID uint) string {
 		return yamlContent
 	}
 	return string(out)
+}
+
+func applyProfileResourceOrderToYAML(yamlContent string, profileID uint, resourceType string) string {
+	orderNames := loadProfileResourceOrderNames(profileID, resourceType)
+	return applyResourceOrderToYAMLContent(yamlContent, resourceType, orderNames)
+}
+
+func applyResourceOrderToYAMLContent(yamlContent string, resourceType string, orderNames []string) string {
+	cleanedOrder := cleanResourceOrderNames(orderNames)
+	if len(cleanedOrder) == 0 {
+		return yamlContent
+	}
+
+	yamlKey, ok := resourceOrderYAMLKey(resourceType)
+	if !ok {
+		return yamlContent
+	}
+
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(yamlContent), &root); err != nil {
+		log.Printf("YAML unmarshal warning in applyResourceOrderToYAMLContent: %v", err)
+		return yamlContent
+	}
+	if len(root.Content) == 0 {
+		return yamlContent
+	}
+
+	docNode := root.Content[0]
+	if docNode.Kind != yaml.MappingNode {
+		return yamlContent
+	}
+
+	seq := findTopLevelSequenceNode(docNode, yamlKey)
+	if seq == nil {
+		return yamlContent
+	}
+
+	applyYAMLSequenceOrderByName(seq, cleanedOrder)
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		log.Printf("YAML marshal warning in applyResourceOrderToYAMLContent: %v", err)
+		return yamlContent
+	}
+	return string(out)
+}
+
+func resourceOrderYAMLKey(resourceType string) (string, bool) {
+	switch resourceType {
+	case resourceOrderTypeNodes:
+		return "proxies", true
+	case resourceOrderTypeGroups:
+		return "proxy-groups", true
+	default:
+		return "", false
+	}
+}
+
+func findTopLevelSequenceNode(docNode *yaml.Node, key string) *yaml.Node {
+	for i := 0; i < len(docNode.Content)-1; i += 2 {
+		if docNode.Content[i].Value == key && docNode.Content[i+1].Kind == yaml.SequenceNode {
+			return docNode.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func applyYAMLSequenceOrderByName(seq *yaml.Node, orderNames []string) {
+	byName := make(map[string][]*yaml.Node, len(seq.Content))
+	for _, item := range seq.Content {
+		if name := yamlMappingName(item); name != "" {
+			byName[name] = append(byName[name], item)
+		}
+	}
+
+	ordered := make([]*yaml.Node, 0, len(seq.Content))
+	usedNames := make(map[string]bool, len(orderNames))
+	for _, name := range orderNames {
+		if matched, ok := byName[name]; ok {
+			ordered = append(ordered, matched...)
+			usedNames[name] = true
+		}
+	}
+
+	for _, item := range seq.Content {
+		name := yamlMappingName(item)
+		if name == "" || !usedNames[name] {
+			ordered = append(ordered, item)
+		}
+	}
+	seq.Content = ordered
+}
+
+func yamlMappingName(node *yaml.Node) string {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return ""
+	}
+	for i := 0; i < len(node.Content)-1; i += 2 {
+		if node.Content[i].Value == "name" {
+			return strings.TrimSpace(node.Content[i+1].Value)
+		}
+	}
+	return ""
 }
 
 // injectCustomRules 基于 yaml.v3 Node 树完成分流规则的强力接管、前置注入与原生去重
@@ -2398,8 +2613,10 @@ func ProcessSubscriptionRawData(rawResponse string, profileID uint) (string, err
 	}
 
 	decodedContent = injectCustomNodes(decodedContent, profileID)
+	decodedContent = applyProfileResourceOrderToYAML(decodedContent, profileID, resourceOrderTypeNodes)
 	decodedContent = injectCustomGroups(decodedContent, profileID)
 	decodedContent = injectCustomRules(decodedContent, profileID)
+	decodedContent = applyProfileResourceOrderToYAML(decodedContent, profileID, resourceOrderTypeGroups)
 
 	return decodedContent, nil
 }
