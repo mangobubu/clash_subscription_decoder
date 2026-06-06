@@ -254,7 +254,8 @@ function isResultTabAvailable(tab: string) {
 }
 
 function applyActiveTabAfterSubscriptionLoad(options: LoadSubscriptionOptions, previousTab: string) {
-  const preferredTab = options.preferredTab || (options.preserveActiveTab ? previousTab : "");
+  const shouldPreserveActiveTab = options.preserveActiveTab ?? true;
+  const preferredTab = options.preferredTab || (shouldPreserveActiveTab ? previousTab : "");
   if (preferredTab && isResultTabAvailable(preferredTab)) {
     activeTab.value = preferredTab;
     return;
@@ -292,7 +293,7 @@ const selectProfile = async (profile: SubscriptionProfile) => {
   errorMsg.value = "";
   dirtyRulesMap.value = {};
   await fetchCustomData();
-  await loadSubscription();
+  await loadSubscription({ preserveActiveTab: false });
 };
 
 const openCreateProfileDialog = () => {
@@ -382,6 +383,7 @@ const refreshCurrentProfile = async () => {
   }
   isLoading.value = true;
   errorMsg.value = "";
+  const previousTab = activeTab.value;
   try {
     const res = await axios.post(buildBackendUrl(`/api/profiles/${activeProfileId.value}/refresh`));
     if (res.data.code === 200) {
@@ -391,7 +393,7 @@ const refreshCurrentProfile = async () => {
       await loadProfiles(activeProfileId.value);
       await fetchCustomData();
       ElMessage.success("当前配置已刷新");
-      activeTab.value = parsedNodes.value.length > 0 ? "nodes" : "text";
+      applyActiveTabAfterSubscriptionLoad({ preserveActiveTab: true }, previousTab);
     }
   } catch (err: any) {
     const msg = err.response?.data?.error || err.response?.data?.message || "刷新配置失败";
@@ -1184,7 +1186,7 @@ const deleteCustomNode = (nodeName: string) => {
           ElMessage.success("自定义节点已被彻底删除！");
           await fetchCustomData();
           if (activeProfileId.value) {
-            await loadSubscription();
+            await loadSubscription({ preferredTab: "nodes" });
           }
         }
       } catch (err: any) {
@@ -1269,7 +1271,7 @@ const saveCustomNode = async () => {
       nodeDialogVisible.value = false;
       await fetchCustomData();
       if (activeProfileId.value) {
-        await loadSubscription();
+        await loadSubscription({ preferredTab: "nodes" });
       }
     } else {
       throw new Error(res.data.message);
@@ -1285,6 +1287,7 @@ const saveCustomNode = async () => {
 
 const dirtyRulesMap = ref<Record<string, any>>({});
 const hasDirtyRules = computed(() => Object.keys(dirtyRulesMap.value).length > 0);
+const isDeletingFilteredRules = ref(false);
 
 const markRuleDirty = (row: any) => {
   dirtyRulesMap.value[getRuleIdentityKey(row)] = row;
@@ -1481,6 +1484,68 @@ const batchSaveRules = async () => {
   }
 };
 
+const deleteFilteredRulesByTarget = async () => {
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
+  if (!ruleTargetFilter.value) {
+    ElMessage.warning("请先选择要删除的目标策略");
+    return;
+  }
+  if (hasDirtyRules.value) {
+    ElMessage.warning("当前存在未保存的规则修改，请先批量应用修改后再删除");
+    return;
+  }
+
+  const rules = parsedRules.value.map((row) => ({
+    type: row.type,
+    payload: row.payload === "-" ? "-" : row.payload,
+    target: row.target,
+  }));
+  if (rules.length === 0) {
+    ElMessage.warning("当前筛选结果为空，无法删除");
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除目标策略「${ruleTargetFilter.value}」下当前筛选出的 ${rules.length} 条规则吗？删除后刷新订阅也不会恢复这些规则。`,
+      "批量删除规则确认",
+      {
+        confirmButtonText: "确认删除",
+        cancelButtonText: "取消",
+        type: "warning",
+        customClass: "glass-dialog",
+      },
+    );
+  } catch {
+    return;
+  }
+
+  isDeletingFilteredRules.value = true;
+  try {
+    const res = await axios.post(buildBackendUrl("/api/custom-rules/batch-delete"), {
+      profile_id: activeProfileId.value,
+      rules,
+    });
+    if (res.data.code !== 200) {
+      throw new Error(res.data.message || "批量删除规则失败");
+    }
+
+    const deletedCount = res.data.data?.deleted || rules.length;
+    ElMessage.success(`已删除 ${deletedCount} 条规则，正在刷新规则列表...`);
+    ruleTargetFilter.value = "";
+    dirtyRulesMap.value = {};
+    await fetchCustomData();
+    await loadSubscription({ preferredTab: "rules" });
+  } catch (error: any) {
+    ElMessage.error("批量删除失败: " + (error.response?.data?.message || error.message));
+  } finally {
+    isDeletingFilteredRules.value = false;
+  }
+};
+
 // ---------------------- 自定义规则管理逻辑 ----------------------
 const ruleDialogVisible = ref(false);
 const isSubmittingRule = ref(false);
@@ -1627,7 +1692,7 @@ const deleteCustomRule = (row: any) => {
           ElMessage.success("自定义分流规则已成功移除！");
           await fetchCustomData();
           if (activeProfileId.value) {
-            await loadSubscription();
+            await loadSubscription({ preferredTab: "rules" });
           }
         }
       } catch (err: any) {
@@ -1677,7 +1742,7 @@ const saveCustomRule = async () => {
       ruleDialogVisible.value = false;
       await fetchCustomData();
       if (activeProfileId.value) {
-        await loadSubscription();
+        await loadSubscription({ preferredTab: "rules" });
       }
     } else {
       throw new Error(res.data.message);
@@ -2415,6 +2480,16 @@ const submitChangePassword = async () => {
                     <el-option label="[全部策略]" value="" />
                     <el-option v-for="t in ruleTargets" :key="t" :label="t" :value="t" />
                   </el-select>
+                  <el-button
+                    type="danger"
+                    plain
+                    round
+                    :disabled="!ruleTargetFilter || parsedRules.length === 0 || hasDirtyRules"
+                    :loading="isDeletingFilteredRules"
+                    @click="deleteFilteredRulesByTarget"
+                  >
+                    一键删除选择的目标策略
+                  </el-button>
                   <el-select
                     v-model="bulkRuleTarget"
                     placeholder="批量设置为目标策略"

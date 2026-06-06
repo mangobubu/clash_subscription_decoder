@@ -35,6 +35,21 @@ func TestNormalizeBatchCustomRulesRejectsInvalidRule(t *testing.T) {
 	}
 }
 
+func TestNormalizeBatchDeletedCustomRulesUsesDeleteMarker(t *testing.T) {
+	rules, err := normalizeBatchDeletedCustomRules(42, []customRuleWritePayload{
+		{Type: " DOMAIN ", Payload: " deleted.example ", Target: "PROXY"},
+	})
+	if err != nil {
+		t.Fatalf("normalizeBatchDeletedCustomRules returned error: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("deleted rules length = %d, want 1", len(rules))
+	}
+	if rules[0].ProfileID != 42 || rules[0].Type != "DOMAIN" || rules[0].Payload != "deleted.example" || rules[0].Target != deletedCustomRuleTarget {
+		t.Fatalf("deleted rule = %+v, want normalized delete marker", rules[0])
+	}
+}
+
 func TestCustomRuleBatchProgressSteps(t *testing.T) {
 	got := customRuleBatchProgressSteps(250, 100)
 	want := []int{100, 200, 250}

@@ -125,6 +125,7 @@ func main() {
 	api.POST("/custom-rules", handleCreateCustomRule)
 	api.POST("/custom-rules/batch", handleBatchSaveCustomRules)
 	api.POST("/custom-rules/batch/stream", handleBatchSaveCustomRulesStream)
+	api.POST("/custom-rules/batch-delete", handleBatchDeleteCustomRules)
 	api.PUT("/custom-rules/:id", handleUpdateCustomRule)
 	api.DELETE("/custom-rules/:id", handleDeleteCustomRule)
 
@@ -834,6 +835,9 @@ func buildManualRuleLines(rules []CustomRule) []string {
 
 	lines := make([]string, 0, len(rules))
 	for _, rule := range rules {
+		if rule.Target == deletedCustomRuleTarget {
+			continue
+		}
 		if rule.Payload == "-" || strings.TrimSpace(rule.Payload) == "" {
 			lines = append(lines, fmt.Sprintf("%s,%s", rule.Type, rule.Target))
 			continue
@@ -1819,6 +1823,7 @@ type customRulesBatchProgress struct {
 }
 
 const customRulesStreamBatchSize = 100
+const deletedCustomRuleTarget = "__DELETE__"
 
 func normalizeCustomRuleWritePayload(input customRuleWritePayload) (customRuleWritePayload, error) {
 	rule := customRuleWritePayload{
@@ -1866,6 +1871,22 @@ func normalizeBatchCustomRules(profileID uint, inputs []customRuleWritePayload) 
 		})
 	}
 	return rules, nil
+}
+
+func normalizeBatchDeletedCustomRules(profileID uint, inputs []customRuleWritePayload) ([]CustomRule, error) {
+	if len(inputs) == 0 {
+		return nil, fmt.Errorf("没有需要删除的规则")
+	}
+
+	deleteInputs := make([]customRuleWritePayload, 0, len(inputs))
+	for _, input := range inputs {
+		deleteInputs = append(deleteInputs, customRuleWritePayload{
+			Type:    input.Type,
+			Payload: input.Payload,
+			Target:  deletedCustomRuleTarget,
+		})
+	}
+	return normalizeBatchCustomRules(profileID, deleteInputs)
 }
 
 func customRuleBatchProgressSteps(total int, batchSize int) []int {
@@ -1962,6 +1983,41 @@ func handleBatchSaveCustomRules(c *gin.Context) {
 		"message": "规则批量保存成功",
 		"data": gin.H{
 			"saved": len(rules),
+		},
+	})
+}
+
+func handleBatchDeleteCustomRules(c *gin.Context) {
+	var req batchCustomRulesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+	profileID, ok := resolveRequestProfileID(c, req.ProfileID)
+	if !ok {
+		return
+	}
+	if err := DB.First(&SubscriptionProfile{}, profileID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "配置不存在"})
+		return
+	}
+
+	rules, err := normalizeBatchDeletedCustomRules(profileID, req.Rules)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+	if err := upsertCustomRulesBatch(rules); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "批量删除规则失败", "error": err.Error()})
+		return
+	}
+
+	ReapplyRulesToProfile(profileID)
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "规则批量删除成功",
+		"data": gin.H{
+			"deleted": len(rules),
 		},
 	})
 }
@@ -2497,6 +2553,9 @@ func injectCustomRules(yamlContent string, profileID uint) string {
 		}
 
 		customFingerprints[fingerprint] = true
+		if cr.Target == deletedCustomRuleTarget {
+			continue
+		}
 		customRuleNodes = append(customRuleNodes, &yaml.Node{
 			Kind:  yaml.ScalarNode,
 			Value: ruleStr,

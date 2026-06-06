@@ -157,6 +157,33 @@ func TestBuildManualProfileYAMLFromResourcesKeepsCustomRules(t *testing.T) {
 	}
 }
 
+func TestBuildManualProfileYAMLFromResourcesSkipsDeletedRules(t *testing.T) {
+	nodes := []CustomNode{
+		{
+			Name:   "新加坡 01",
+			Type:   "socks5",
+			Server: "127.0.0.1",
+			Port:   1080,
+			Config: `{"name":"新加坡 01","type":"socks5","server":"127.0.0.1","port":1080}`,
+		},
+	}
+	rules := []CustomRule{
+		{Type: "DOMAIN-SUFFIX", Payload: "deleted.example", Target: deletedCustomRuleTarget},
+		{Type: "MATCH", Payload: "-", Target: "DIRECT"},
+	}
+
+	got, err := buildManualProfileYAMLFromResources(nodes, nil, rules)
+	if err != nil {
+		t.Fatalf("buildManualProfileYAMLFromResources returned error: %v", err)
+	}
+	if strings.Contains(got, deletedCustomRuleTarget) || strings.Contains(got, "deleted.example") {
+		t.Fatalf("generated YAML should skip deleted rules:\n%s", got)
+	}
+	if !strings.Contains(got, "MATCH,DIRECT") {
+		t.Fatalf("generated YAML missing retained rule:\n%s", got)
+	}
+}
+
 func TestApplyResourceOrderToYAMLContentOrdersNodes(t *testing.T) {
 	content := `proxies:
   - name: 节点 A
