@@ -2500,6 +2500,56 @@ func yamlMappingName(node *yaml.Node) string {
 
 // injectCustomRules 基于 yaml.v3 Node 树完成分流规则的强力接管、前置注入与原生去重
 func injectCustomRules(yamlContent string, profileID uint) string {
+	customRules, _ := GetCustomRules(profileID)
+	return injectCustomRulesWithRules(yamlContent, customRules)
+}
+
+func isTerminalRuleType(ruleType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(ruleType)) {
+	case "MATCH", "FINAL":
+		return true
+	default:
+		return false
+	}
+}
+
+func splitRuleParts(ruleLine string) []string {
+	parts := strings.Split(strings.TrimSpace(ruleLine), ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
+}
+
+func customRuleLineAndFingerprint(rule CustomRule) (string, string) {
+	ruleType := strings.TrimSpace(rule.Type)
+	payload := strings.TrimSpace(rule.Payload)
+	target := strings.TrimSpace(rule.Target)
+	normalizedType := strings.ToUpper(ruleType)
+	if payload == "-" || payload == "" {
+		return fmt.Sprintf("%s,%s", ruleType, target), normalizedType
+	}
+	return fmt.Sprintf("%s,%s,%s", ruleType, payload, target), fmt.Sprintf("%s,%s", normalizedType, payload)
+}
+
+func ruleFingerprintFromParts(parts []string) string {
+	if len(parts) == 0 || parts[0] == "" {
+		return ""
+	}
+	ruleType := strings.ToUpper(parts[0])
+	if isTerminalRuleType(ruleType) {
+		return ruleType
+	}
+	if len(parts) >= 3 {
+		return fmt.Sprintf("%s,%s", ruleType, parts[1])
+	}
+	if len(parts) == 2 {
+		return ruleType
+	}
+	return strings.Join(parts, ",")
+}
+
+func injectCustomRulesWithRules(yamlContent string, customRules []CustomRule) string {
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(yamlContent), &root); err != nil {
 		log.Printf("YAML unmarshal warning in injectCustomRules: %v", err)
@@ -2535,59 +2585,60 @@ func injectCustomRules(yamlContent string, profileID uint) string {
 	}
 
 	// 1. 获取所有自定义规则并建立指纹映射，用于后续原生规则的去重剥离
-	customRules, _ := GetCustomRules(profileID)
 	customFingerprints := make(map[string]bool)
 	var customRuleNodes []*yaml.Node
+	var customTerminalRuleNodes []*yaml.Node
+	hasCustomTerminalRule := false
 
 	for _, cr := range customRules {
-		// 生成规则字符串: TYPE,PAYLOAD,TARGET
-		// 若 PAYLOAD 为 "-", 说明这是没有中间 payload 的规则（如 MATCH）
-		var ruleStr string
-		var fingerprint string
-		if cr.Payload == "-" || cr.Payload == "" {
-			ruleStr = fmt.Sprintf("%s,%s", cr.Type, cr.Target)
-			fingerprint = cr.Type
-		} else {
-			ruleStr = fmt.Sprintf("%s,%s,%s", cr.Type, cr.Payload, cr.Target)
-			fingerprint = fmt.Sprintf("%s,%s", cr.Type, cr.Payload)
-		}
-
+		ruleStr, fingerprint := customRuleLineAndFingerprint(cr)
 		customFingerprints[fingerprint] = true
+		isTerminalRule := isTerminalRuleType(cr.Type)
+		if isTerminalRule {
+			hasCustomTerminalRule = true
+		}
 		if cr.Target == deletedCustomRuleTarget {
 			continue
 		}
-		customRuleNodes = append(customRuleNodes, &yaml.Node{
+		ruleNode := &yaml.Node{
 			Kind:  yaml.ScalarNode,
 			Value: ruleStr,
-		})
+		}
+		if isTerminalRule {
+			customTerminalRuleNodes = append(customTerminalRuleNodes, ruleNode)
+			continue
+		}
+		customRuleNodes = append(customRuleNodes, ruleNode)
 	}
 
 	// 2. 遍历原有订阅规则，剥离掉与自定义规则指纹冲突的部分（实现覆盖）
 	var filteredOriginalRules []*yaml.Node
+	var originalTerminalRules []*yaml.Node
 	for _, rn := range rulesNode.Content {
 		// 解析原生规则指纹
-		parts := strings.Split(rn.Value, ",")
-		if len(parts) >= 1 {
-			var fingerprint string
-			if len(parts) >= 3 {
-				fingerprint = fmt.Sprintf("%s,%s", parts[0], parts[1])
-			} else if len(parts) == 2 {
-				// MATCH,Proxy
-				fingerprint = parts[0]
-			} else {
-				fingerprint = rn.Value
-			}
-
-			// 如果该原生指纹在自定义规则中已存在，则抛弃（跳过），完成覆盖逻辑
-			if customFingerprints[fingerprint] {
+		parts := splitRuleParts(rn.Value)
+		fingerprint := ruleFingerprintFromParts(parts)
+		isTerminalRule := len(parts) > 0 && isTerminalRuleType(parts[0])
+		if fingerprint != "" && customFingerprints[fingerprint] {
+			continue
+		}
+		if isTerminalRule {
+			if hasCustomTerminalRule {
 				continue
 			}
+			originalTerminalRules = append(originalTerminalRules, rn)
+			continue
 		}
 		filteredOriginalRules = append(filteredOriginalRules, rn)
 	}
 
-	// 3. 强行接管：将自定义规则永远排在原生规则的最前面（享有最高处理优先级）
+	// 3. 普通自定义规则前置，MATCH/FINAL 等终止规则始终保留在末尾兜底。
 	rulesNode.Content = append(customRuleNodes, filteredOriginalRules...)
+	if hasCustomTerminalRule {
+		rulesNode.Content = append(rulesNode.Content, customTerminalRuleNodes...)
+	} else {
+		rulesNode.Content = append(rulesNode.Content, originalTerminalRules...)
+	}
 
 	// 转回 YAML 字符串
 	out, err := yaml.Marshal(&root)

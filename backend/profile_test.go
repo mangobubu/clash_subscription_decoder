@@ -308,6 +308,25 @@ rules:
 	}
 }
 
+func TestInjectCustomRulesKeepsCustomTerminalRuleAtEnd(t *testing.T) {
+	content := `rules:
+  - DOMAIN-SUFFIX,qq.com,Proxy
+  - MATCH,Proxy
+  - DOMAIN-SUFFIX,example.com,Proxy
+`
+
+	got := injectCustomRulesWithRules(content, []CustomRule{
+		{Type: "MATCH", Payload: "-", Target: "Leak"},
+		{Type: "DOMAIN-SUFFIX", Payload: "qq.com", Target: "DIRECT"},
+	})
+
+	assertStringSliceEqual(t, yamlSequenceScalars(t, got, "rules"), []string{
+		"DOMAIN-SUFFIX,qq.com,DIRECT",
+		"DOMAIN-SUFFIX,example.com,Proxy",
+		"MATCH,Leak",
+	})
+}
+
 func TestFilterNewLocalizedRulesSkipsExistingManualRules(t *testing.T) {
 	existing := []CustomRule{
 		{ID: 1, ProfileID: 3, Type: "GEOSITE", Payload: "cn", Target: "REJECT"},
@@ -372,6 +391,29 @@ func yamlSequenceNames(t *testing.T, content string, key string) []string {
 		names = append(names, yamlMappingName(item))
 	}
 	return names
+}
+
+func yamlSequenceScalars(t *testing.T, content string, key string) []string {
+	t.Helper()
+
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(content), &root); err != nil {
+		t.Fatalf("yaml.Unmarshal returned error: %v\n%s", err, content)
+	}
+	if len(root.Content) == 0 {
+		t.Fatalf("YAML content is empty:\n%s", content)
+	}
+
+	seq := findTopLevelSequenceNode(root.Content[0], key)
+	if seq == nil {
+		t.Fatalf("YAML missing sequence %q:\n%s", key, content)
+	}
+
+	values := make([]string, 0, len(seq.Content))
+	for _, item := range seq.Content {
+		values = append(values, item.Value)
+	}
+	return values
 }
 
 func assertStringSliceEqual(t *testing.T, got []string, want []string) {
