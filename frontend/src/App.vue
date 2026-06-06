@@ -763,6 +763,23 @@ const ruleSearchQuery = ref("");
 
 // 分流规则目标策略筛选
 const ruleTargetFilter = ref("");
+const bulkRuleTarget = ref("");
+
+const builtInRuleTargetOptions = [
+  { label: "DIRECT (直连)", value: "DIRECT" },
+  { label: "REJECT (拒绝)", value: "REJECT" },
+  { label: "PROXY (默认代理)", value: "PROXY" },
+];
+
+interface RuleDisplayRow {
+  raw: string;
+  type: string;
+  payload: string;
+  target: string;
+}
+
+const getRuleIdentityKey = (row: Pick<RuleDisplayRow, "type" | "payload">) =>
+  row.payload === "-" ? row.type : `${row.type},${row.payload}`;
 
 const parseRuleForDisplay = (ruleStr: string) => {
   const parts = String(ruleStr).split(",").map((part) => part.trim());
@@ -808,7 +825,7 @@ watch([ruleSearchQuery, ruleTargetFilter], () => {
 });
 
 // 分流规则解析 (拆解 DOMAIN-SUFFIX,google.com,PROXY)
-const parsedRules = computed<any[]>(() => {
+const parsedRules = computed<RuleDisplayRow[]>(() => {
   if (!parsedConfig.value || !parsedConfig.value.rules) return [];
   let rules = parsedConfig.value.rules.map((ruleStr: string) => parseRuleForDisplay(ruleStr));
 
@@ -1261,8 +1278,36 @@ const dirtyRulesMap = ref<Record<string, any>>({});
 const hasDirtyRules = computed(() => Object.keys(dirtyRulesMap.value).length > 0);
 
 const markRuleDirty = (row: any) => {
-  let key = row.payload === "-" ? row.type : `${row.type},${row.payload}`;
-  dirtyRulesMap.value[key] = row;
+  dirtyRulesMap.value[getRuleIdentityKey(row)] = row;
+};
+
+const applyBulkRuleTargetToFilteredRules = () => {
+  const nextTarget = bulkRuleTarget.value.trim();
+  if (!nextTarget) {
+    ElMessage.warning("请选择要批量设置的目标策略");
+    return;
+  }
+
+  const filteredRules = parsedRules.value;
+  if (filteredRules.length === 0) {
+    ElMessage.warning("当前筛选结果为空，无法批量设置");
+    return;
+  }
+
+  let changedCount = 0;
+  filteredRules.forEach((row) => {
+    if (row.target === nextTarget) return;
+    row.target = nextTarget;
+    markRuleDirty(row);
+    changedCount += 1;
+  });
+
+  if (changedCount === 0) {
+    ElMessage.info("当前筛选结果已全部使用该目标策略");
+    return;
+  }
+
+  ElMessage.success(`已将当前筛选的 ${changedCount} 条规则设置为 ${nextTarget}，请点击批量应用修改保存`);
 };
 
 const batchSaveRules = async () => {
@@ -1275,7 +1320,7 @@ const batchSaveRules = async () => {
   
   try {
     const promises = Object.values(dirtyRulesMap.value).map((row: any) => {
-      let key = row.payload === "-" ? row.type : `${row.type},${row.payload}`;
+      let key = getRuleIdentityKey(row);
       let customInfo = customRulesDict.value[key];
       let submitData = {
         profile_id: activeProfileId.value,
@@ -1410,7 +1455,7 @@ const openRuleDialog = () => {
 };
 
 const editRule = (row: any) => {
-  let key = row.payload === "-" ? row.type : `${row.type},${row.payload}`;
+  let key = getRuleIdentityKey(row);
   let customInfo = customRulesDict.value[key];
 
   if (customInfo) {
@@ -1432,7 +1477,7 @@ const editRule = (row: any) => {
 };
 
 const deleteCustomRule = (row: any) => {
-  let key = row.payload === "-" ? row.type : `${row.type},${row.payload}`;
+  let key = getRuleIdentityKey(row);
   let customInfo = customRulesDict.value[key];
   if (!customInfo) return;
 
@@ -1515,8 +1560,7 @@ const saveCustomRule = async () => {
 };
 
 const isCustomRule = (row: any) => {
-  let key = row.payload === "-" ? row.type : `${row.type},${row.payload}`;
-  return !!customRulesDict.value[key];
+  return !!customRulesDict.value[getRuleIdentityKey(row)];
 };
 
 // ---------------------- 个人中心 (修改密码与退出登录) ----------------------
@@ -2227,7 +2271,7 @@ const submitChangePassword = async () => {
               </template>
 
               <div class="rules-container glass-card">
-                <div class="rules-toolbar" style="display: flex; gap: 15px;">
+                <div class="rules-toolbar" style="display: flex; flex-wrap: wrap; align-items: center; gap: 15px;">
                   <el-select
                     v-model="ruleTargetFilter"
                     placeholder="目标策略过滤"
@@ -2239,6 +2283,48 @@ const submitChangePassword = async () => {
                     <el-option label="[全部策略]" value="" />
                     <el-option v-for="t in ruleTargets" :key="t" :label="t" :value="t" />
                   </el-select>
+                  <el-select
+                    v-model="bulkRuleTarget"
+                    placeholder="批量设置为目标策略"
+                    clearable
+                    filterable
+                    allow-create
+                    default-first-option
+                    style="width: 240px;"
+                    popper-class="glass-dropdown"
+                  >
+                    <el-option
+                      v-for="option in builtInRuleTargetOptions"
+                      :key="option.value"
+                      :label="option.label"
+                      :value="option.value"
+                    />
+                    <el-option-group label="现有策略组">
+                      <el-option
+                        v-for="g in proxyGroups"
+                        :key="g.name"
+                        :label="g.name"
+                        :value="g.name"
+                      />
+                    </el-option-group>
+                    <el-option-group label="现有独立节点">
+                      <el-option
+                        v-for="n in parsedNodes"
+                        :key="n.name"
+                        :label="n.name"
+                        :value="n.name"
+                      />
+                    </el-option-group>
+                  </el-select>
+                  <el-button
+                    type="primary"
+                    plain
+                    round
+                    :disabled="!bulkRuleTarget || parsedRules.length === 0"
+                    @click="applyBulkRuleTargetToFilteredRules"
+                  >
+                    一键设置筛选结果
+                  </el-button>
                   <el-input
                     v-model="ruleSearchQuery"
                     placeholder="输入关键字进一步检索规则类型或内容..."
@@ -2329,9 +2415,12 @@ const submitChangePassword = async () => {
                           popper-class="glass-dropdown"
                           @change="markRuleDirty(scope.row)"
                         >
-                          <el-option label="DIRECT (直连)" value="DIRECT" />
-                          <el-option label="REJECT (拒绝)" value="REJECT" />
-                          <el-option label="PROXY (默认代理)" value="PROXY" />
+                          <el-option
+                            v-for="option in builtInRuleTargetOptions"
+                            :key="option.value"
+                            :label="option.label"
+                            :value="option.value"
+                          />
                           <el-option-group label="现有策略组">
                             <el-option
                               v-for="g in proxyGroups"
@@ -2828,9 +2917,12 @@ const submitChangePassword = async () => {
             style="width: 100%"
             popper-class="glass-dropdown"
           >
-            <el-option label="DIRECT (直连)" value="DIRECT" />
-            <el-option label="REJECT (拒绝)" value="REJECT" />
-            <el-option label="PROXY (默认代理)" value="PROXY" />
+            <el-option
+              v-for="option in builtInRuleTargetOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
             <el-option-group label="现有策略组">
               <el-option
                 v-for="g in proxyGroups"
