@@ -2736,6 +2736,7 @@ rules:
 	}
 
 	var lastErr error
+	var bestCandidate subscriptionFetchCandidate
 	for i, strategy := range strategies {
 		req, err := http.NewRequest("GET", targetURL, nil)
 		if err != nil {
@@ -2804,8 +2805,18 @@ rules:
 			continue
 		}
 
-		// 成功直接返回
-		return string(bodyBytes), nil
+		candidate := newSubscriptionFetchCandidate(strategy.Name, string(bodyBytes))
+		log.Printf("[Clash-Proxy selector] strategy=%s format=%s nodes=%d score=%d", candidate.Strategy, candidate.Format, candidate.NodeCount, candidate.Score)
+		if isBetterSubscriptionFetchCandidate(candidate, bestCandidate) {
+			bestCandidate = candidate
+		}
+		if candidate.NodeCount >= preferredSubscriptionNodeCount {
+			return candidate.Body, nil
+		}
+	}
+
+	if bestCandidate.Body != "" {
+		return bestCandidate.Body, nil
 	}
 
 	return "", fmt.Errorf("多重自适应策略抓取均告失败。最后报错: %w", lastErr)
@@ -2817,6 +2828,61 @@ func truncateUA(ua string, limit int) string {
 		return ua
 	}
 	return ua[:limit] + "..."
+}
+
+const preferredSubscriptionNodeCount = 20
+
+type subscriptionFetchCandidate struct {
+	Strategy  string
+	Body      string
+	Format    string
+	Score     int
+	NodeCount int
+}
+
+func newSubscriptionFetchCandidate(strategyName string, body string) subscriptionFetchCandidate {
+	candidate := subscriptionFetchCandidate{
+		Strategy: strategyName,
+		Body:     body,
+		Format:   "unsupported",
+		Score:    1,
+	}
+
+	normalizedContent, err := decodeSubscriptionPlainContent(body)
+	if err != nil {
+		return candidate
+	}
+
+	candidate.NodeCount = countClashProxyNodes(normalizedContent)
+	candidate.Format = "clash-yaml"
+	candidate.Score = 1000 + candidate.NodeCount
+	if candidate.NodeCount > 0 {
+		candidate.Score += 10000
+	}
+	return candidate
+}
+
+func isBetterSubscriptionFetchCandidate(candidate, current subscriptionFetchCandidate) bool {
+	if current.Body == "" {
+		return true
+	}
+	if candidate.Score != current.Score {
+		return candidate.Score > current.Score
+	}
+	if candidate.NodeCount != current.NodeCount {
+		return candidate.NodeCount > current.NodeCount
+	}
+	return len(candidate.Body) > len(current.Body)
+}
+
+func countClashProxyNodes(content string) int {
+	var cfg struct {
+		Proxies []map[string]interface{} `yaml:"proxies"`
+	}
+	if err := yaml.Unmarshal([]byte(content), &cfg); err != nil {
+		return 0
+	}
+	return len(cfg.Proxies)
 }
 
 // decodeAdaptiveBase64 强健的自适应 Base64 解码函数
@@ -2867,17 +2933,103 @@ func decodeSubscriptionPlainContent(rawResponse string) (string, error) {
 		if looksLikePlainSubscriptionConfig(rawResponse) {
 			decodedContent = rawResponse
 		} else {
-			return "", fmt.Errorf("解析失败，且不包含常见配置文件特征，目标地址返回的内容格式不支持: %v", err)
+			decodedContent = rawResponse
 		}
 	}
 
-	lines := strings.Split(decodedContent, "\n")
+	if looksLikePlainSubscriptionConfig(decodedContent) {
+		return unescapeSubscriptionLines(decodedContent), nil
+	}
+
+	if convertedContent, convertErr := convertProxyURIListToClashYAML(decodedContent); convertErr == nil {
+		return convertedContent, nil
+	}
+
+	unescapedContent := unescapeSubscriptionLines(decodedContent)
+	if convertedContent, convertErr := convertProxyURIListToClashYAML(unescapedContent); convertErr == nil {
+		return convertedContent, nil
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("解析失败，且不包含常见配置文件特征，目标地址返回的内容格式不支持: %v", err)
+	}
+	return "", fmt.Errorf("解析失败，目标地址返回的内容既不是 Clash YAML，也不是可识别的节点 URI 列表")
+}
+
+func unescapeSubscriptionLines(content string) string {
+	lines := strings.Split(content, "\n")
 	for i, line := range lines {
 		if unescaped, err := url.PathUnescape(strings.TrimSpace(line)); err == nil {
 			lines[i] = unescaped
 		}
 	}
-	return strings.Join(lines, "\n"), nil
+	return strings.Join(lines, "\n")
+}
+
+func convertProxyURIListToClashYAML(content string) (string, error) {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	proxies := make([]map[string]interface{}, 0, len(lines))
+	nodeNames := make([]string, 0, len(lines))
+	usedNames := make(map[string]int)
+
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "://") {
+			continue
+		}
+
+		parsedProxy, err := ParseProxyLink(line)
+		if err != nil {
+			log.Printf("skip unsupported proxy uri: %v", err)
+			continue
+		}
+
+		name := uniqueProxyName(parsedProxy.Name, usedNames)
+		if name != parsedProxy.Name {
+			parsedProxy.Config["name"] = name
+		}
+		proxies = append(proxies, parsedProxy.Config)
+		nodeNames = append(nodeNames, name)
+	}
+
+	if len(proxies) == 0 {
+		return "", fmt.Errorf("未找到可转换的节点 URI")
+	}
+
+	cfg := manualProfileConfig{
+		MixedPort:   manualDefaultMixedPort,
+		AllowLan:    true,
+		Mode:        "rule",
+		LogLevel:    "info",
+		GeodataMode: true,
+		Proxies:     proxies,
+		ProxyGroups: []manualProxyGroupConfig{defaultManualProxyGroup(nodeNames)},
+		Rules: []string{
+			defaultGeositeDirectRule,
+			defaultGeoIPDirectRule,
+			defaultProxyMatchRule,
+		},
+	}
+
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("生成 Clash YAML 失败: %w", err)
+	}
+	return string(out), nil
+}
+
+func uniqueProxyName(name string, usedNames map[string]int) string {
+	baseName := strings.TrimSpace(name)
+	if baseName == "" {
+		baseName = "Proxy"
+	}
+
+	count := usedNames[baseName]
+	usedNames[baseName] = count + 1
+	if count == 0 {
+		return baseName
+	}
+	return fmt.Sprintf("%s %d", baseName, count+1)
 }
 
 // truncateString 截断字符串，防止返回大文件时撑爆网络通道

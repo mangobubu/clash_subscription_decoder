@@ -38,6 +38,8 @@ func ParseProxyLink(link string) (*ParsedProxyResult, error) {
 		return parseVLESS(u)
 	case "hysteria2", "hy2":
 		return parseHysteria2(u)
+	case "anytls":
+		return parseAnyTLS(u)
 	case "ss":
 		return parseSS(u)
 	case "socks5", "socks":
@@ -91,6 +93,12 @@ func parseVLESS(u *url.URL) (*ParsedProxyResult, error) {
 	if flow := query.Get("flow"); flow != "" {
 		config["flow"] = flow
 	}
+	if encryption := query.Get("encryption"); encryption != "" {
+		config["encryption"] = encryption
+	}
+	if truthyString(firstNonEmptyQuery(query, "allowInsecure", "insecure", "skip-cert-verify")) {
+		config["skip-cert-verify"] = true
+	}
 
 	// Network
 	switch net := query.Get("type"); net {
@@ -107,6 +115,8 @@ func parseVLESS(u *url.URL) (*ParsedProxyResult, error) {
 		config["grpc-opts"] = map[string]interface{}{
 			"grpc-service-name": query.Get("serviceName"),
 		}
+	case "tcp":
+		config["network"] = "tcp"
 	}
 
 	if security := query.Get("security"); security == "reality" {
@@ -119,6 +129,57 @@ func parseVLESS(u *url.URL) (*ParsedProxyResult, error) {
 	return &ParsedProxyResult{
 		Name:   name,
 		Type:   "vless",
+		Server: host,
+		Port:   port,
+		Config: config,
+	}, nil
+}
+
+func parseAnyTLS(u *url.URL) (*ParsedProxyResult, error) {
+	password := u.User.Username()
+	host := u.Hostname()
+	portStr := u.Port()
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid port: %s", portStr)
+	}
+
+	name := u.Fragment
+	if name == "" {
+		name = host
+	}
+	if unescaped, err := url.PathUnescape(name); err == nil {
+		name = unescaped
+	}
+
+	query := u.Query()
+	config := map[string]interface{}{
+		"name":     name,
+		"type":     "anytls",
+		"server":   host,
+		"port":     port,
+		"password": password,
+	}
+
+	if sni := firstNonEmptyQuery(query, "sni", "servername", "peer"); sni != "" {
+		config["sni"] = sni
+	}
+	if truthyString(firstNonEmptyQuery(query, "insecure", "allowInsecure", "skip-cert-verify")) {
+		config["skip-cert-verify"] = true
+	}
+	if alpn := query.Get("alpn"); alpn != "" {
+		config["alpn"] = strings.Split(alpn, ",")
+	}
+	if fp := firstNonEmptyQuery(query, "fp", "client-fingerprint"); fp != "" {
+		config["client-fingerprint"] = fp
+	}
+	if truthyString(query.Get("udp")) {
+		config["udp"] = true
+	}
+
+	return &ParsedProxyResult{
+		Name:   name,
+		Type:   "anytls",
 		Server: host,
 		Port:   port,
 		Config: config,
@@ -174,9 +235,14 @@ func parseHysteria2(u *url.URL) (*ParsedProxyResult, error) {
 func parseSS(u *url.URL) (*ParsedProxyResult, error) {
 	// ss://base64(method:password)@server:port#name or ss://method:password@server:port#name
 	var method, password string
-	
+
 	host := u.Hostname()
 	portStr := u.Port()
+	if host == "" || portStr == "" {
+		if legacyURL, ok := decodeLegacySSURL(u); ok {
+			return parseSS(legacyURL)
+		}
+	}
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid port: %s", portStr)
@@ -218,6 +284,9 @@ func parseSS(u *url.URL) (*ParsedProxyResult, error) {
 		"cipher":   method,
 		"password": password,
 	}
+	if truthyString(u.Query().Get("udp")) {
+		config["udp"] = true
+	}
 
 	return &ParsedProxyResult{
 		Name:   name,
@@ -226,6 +295,31 @@ func parseSS(u *url.URL) (*ParsedProxyResult, error) {
 		Port:   port,
 		Config: config,
 	}, nil
+}
+
+func decodeLegacySSURL(u *url.URL) (*url.URL, bool) {
+	encoded := strings.TrimSpace(u.Host)
+	if encoded == "" {
+		encoded = strings.TrimPrefix(strings.TrimSpace(u.Opaque), "//")
+	}
+	if encoded == "" {
+		return nil, false
+	}
+
+	decoded, err := decodeAdaptiveBase64(encoded)
+	if err != nil || !strings.Contains(decoded, "@") {
+		return nil, false
+	}
+
+	rebuilt := "ss://" + decoded
+	if u.RawQuery != "" {
+		rebuilt += "?" + u.RawQuery
+	}
+	if u.RawFragment != "" {
+		rebuilt += "#" + u.RawFragment
+	}
+	legacyURL, err := url.Parse(rebuilt)
+	return legacyURL, err == nil
 }
 
 func parseSocks5(u *url.URL) (*ParsedProxyResult, error) {
@@ -254,7 +348,7 @@ func parseSocks5(u *url.URL) (*ParsedProxyResult, error) {
 	if u.User != nil {
 		username := u.User.Username()
 		password, hasPassword := u.User.Password()
-		
+
 		// 尝试处理 base64 编码的 userInfo
 		if !hasPassword && !strings.Contains(username, ":") {
 			decoded, err := decodeAdaptiveBase64(username)
@@ -283,6 +377,24 @@ func parseSocks5(u *url.URL) (*ParsedProxyResult, error) {
 	}, nil
 }
 
+func firstNonEmptyQuery(values url.Values, keys ...string) string {
+	for _, key := range keys {
+		if value := values.Get(key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func truthyString(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 // normalizeSocksLink 尝试修正没有 @ 分隔符的非标准 socks 链接，如 socks5://ip:port:user:pass
 func normalizeSocksLink(link string) string {
 	lower := strings.ToLower(link)
@@ -296,7 +408,7 @@ func normalizeSocksLink(link string) string {
 	}
 
 	content := link[len(prefix):]
-	
+
 	// 暂存 fragment 和 query 以便后续拼回
 	nameSuffix := ""
 	if idx := strings.Index(content, "#"); idx != -1 {
@@ -321,13 +433,13 @@ func normalizeSocksLink(link string) string {
 			if len(parts) >= 4 {
 				pass = strings.Join(parts[3:], ":") // 密码中可能含有冒号
 			}
-			
+
 			if pass != "" {
 				return prefix + user + ":" + pass + "@" + ip + ":" + port + querySuffix + nameSuffix
 			}
 			return prefix + user + "@" + ip + ":" + port + querySuffix + nameSuffix
 		}
 	}
-	
+
 	return link
 }

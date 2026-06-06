@@ -373,6 +373,76 @@ func TestDecodeSubscriptionPlainContentAcceptsBase64Yaml(t *testing.T) {
 	}
 }
 
+func TestDecodeSubscriptionPlainContentConvertsBase64ProxyURIList(t *testing.T) {
+	ssUserInfo := base64.StdEncoding.EncodeToString([]byte("aes-128-gcm:ss-pass"))
+	uriList := strings.Join([]string{
+		"ss://" + ssUserInfo + "@ss.example.com:8388?udp=1#SS%20One",
+		"anytls://any-pass@any.example.com:443?sni=apple.com&insecure=1&udp=1#AnyTLS%20One",
+		"vless://00000000-0000-0000-0000-000000000000@vless.example.com:443?security=reality&sni=apple.com&flow=xtls-rprx-vision&encryption=none&pbk=pub-key&sid=short-id&fp=ios&type=tcp&allowInsecure=1#VLESS%20One",
+	}, "\n")
+	raw := base64.StdEncoding.EncodeToString([]byte(uriList))
+
+	got, err := decodeSubscriptionPlainContent(raw)
+	if err != nil {
+		t.Fatalf("decodeSubscriptionPlainContent returned error: %v", err)
+	}
+
+	names := yamlSequenceNames(t, got, "proxies")
+	assertStringSliceEqual(t, names, []string{"SS One", "AnyTLS One", "VLESS One"})
+
+	var cfg manualProfileConfig
+	if err := yaml.Unmarshal([]byte(got), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal returned error: %v\n%s", err, got)
+	}
+	if len(cfg.ProxyGroups) != 1 {
+		t.Fatalf("proxy groups length = %d, want 1", len(cfg.ProxyGroups))
+	}
+	assertStringSliceEqual(t, cfg.ProxyGroups[0].Proxies, []string{"SS One", "AnyTLS One", "VLESS One", manualDirectPolicyName})
+
+	var rawCfg struct {
+		Proxies []map[string]interface{} `yaml:"proxies"`
+	}
+	if err := yaml.Unmarshal([]byte(got), &rawCfg); err != nil {
+		t.Fatalf("yaml.Unmarshal returned error: %v\n%s", err, got)
+	}
+	if rawCfg.Proxies[1]["type"] != "anytls" {
+		t.Fatalf("second proxy type = %v, want anytls", rawCfg.Proxies[1]["type"])
+	}
+	if rawCfg.Proxies[1]["skip-cert-verify"] != true {
+		t.Fatalf("anytls skip-cert-verify = %v, want true", rawCfg.Proxies[1]["skip-cert-verify"])
+	}
+}
+
+func TestSubscriptionFetchCandidatePrefersMoreNormalizedNodes(t *testing.T) {
+	degradedYAML := `proxies:
+  - name: Only SS
+    type: ss
+    server: ss.example.com
+    port: 8388
+    cipher: aes-128-gcm
+    password: ss-pass
+`
+	uriList := strings.Join([]string{
+		"anytls://pass-a@a.example.com:443#AnyTLS%20A",
+		"anytls://pass-b@b.example.com:443#AnyTLS%20B",
+		"vless://00000000-0000-0000-0000-000000000000@vless.example.com:443?security=tls#VLESS%20A",
+	}, "\n")
+	fullRaw := base64.StdEncoding.EncodeToString([]byte(uriList))
+
+	degradedCandidate := newSubscriptionFetchCandidate("clash", degradedYAML)
+	fullCandidate := newSubscriptionFetchCandidate("curl", fullRaw)
+
+	if degradedCandidate.NodeCount != 1 {
+		t.Fatalf("degraded node count = %d, want 1", degradedCandidate.NodeCount)
+	}
+	if fullCandidate.NodeCount != 3 {
+		t.Fatalf("full node count = %d, want 3", fullCandidate.NodeCount)
+	}
+	if !isBetterSubscriptionFetchCandidate(fullCandidate, degradedCandidate) {
+		t.Fatalf("expected URI-list candidate with more nodes to win")
+	}
+}
+
 func TestGenerateProfileSubTokenCarriesProfileID(t *testing.T) {
 	token := generateProfileSubToken(SubscriptionProfile{ID: 42})
 	decoded, err := base64.URLEncoding.DecodeString(token)
