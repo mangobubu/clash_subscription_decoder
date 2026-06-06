@@ -960,7 +960,10 @@ const newGroupForm = ref({
 });
 
 const groupTypes = ["select", "url-test", "fallback", "load-balance"];
-const builtInGroupProxies = [{ label: "DIRECT (直连)", value: "DIRECT" }];
+const builtInGroupProxies = [
+  { label: "DIRECT (直连)", value: "DIRECT" },
+  { label: "REJECT (拒绝)", value: "REJECT" },
+];
 
 const openGroupDialog = () => {
   editingGroupId.value = null;
@@ -1034,6 +1037,12 @@ const selectAllExistingGroups = () => {
 const selectDirectPolicy = () => {
   if (!newGroupForm.value.proxies.includes("DIRECT")) {
     newGroupForm.value.proxies.push("DIRECT");
+  }
+};
+
+const selectRejectPolicy = () => {
+  if (!newGroupForm.value.proxies.includes("REJECT")) {
+    newGroupForm.value.proxies.push("REJECT");
   }
 };
 
@@ -2772,6 +2781,14 @@ const submitChangePassword = async () => {
               @click="selectDirectPolicy"
             >
               加入 DIRECT 直连
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              @click="selectRejectPolicy"
+            >
+              加入 REJECT 拒绝
             </el-button>
           </div>
           <el-select
