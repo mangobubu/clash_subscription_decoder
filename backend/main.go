@@ -105,6 +105,8 @@ func main() {
 	api.POST("/profiles/:id/localize-rules", handleLocalizeProfileRules)
 	api.GET("/subscription", handleGetSubscription)
 	api.PUT("/resource-orders", handleUpdateResourceOrder)
+	api.POST("/subscription-resources/takeover", handleTakeoverSubscriptionResource)
+	api.POST("/subscription-resources/delete", handleDeleteSubscriptionResource)
 
 	// 注册解析节点链接接口
 	api.POST("/parse-link", handleParseLink)
@@ -1017,6 +1019,9 @@ func handleDeleteProfile(c *gin.Context) {
 		if err := tx.Where("profile_id = ?", profile.ID).Delete(&ProfileResourceOrder{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("profile_id = ?", profile.ID).Delete(&HiddenSubscriptionResource{}).Error; err != nil {
+			return err
+		}
 		return tx.Delete(&profile).Error
 	})
 	if err != nil {
@@ -1610,10 +1615,11 @@ func handleLocalizeProfileRules(c *gin.Context) {
 }
 
 type BackupData struct {
-	Profiles []SubscriptionProfile `json:"profiles"`
-	Groups   []CustomProxyGroup    `json:"groups"`
-	Nodes    []CustomNode          `json:"nodes"`
-	Rules    []CustomRule          `json:"rules"`
+	Profiles        []SubscriptionProfile        `json:"profiles"`
+	Groups          []CustomProxyGroup           `json:"groups"`
+	Nodes           []CustomNode                 `json:"nodes"`
+	Rules           []CustomRule                 `json:"rules"`
+	HiddenResources []HiddenSubscriptionResource `json:"hidden_resources"`
 }
 
 func handleBackup(c *gin.Context) {
@@ -1632,6 +1638,10 @@ func handleBackup(c *gin.Context) {
 	}
 	if err := DB.Find(&data.Rules).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取规则失败"})
+		return
+	}
+	if err := DB.Find(&data.HiddenResources).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取隐藏资源失败"})
 		return
 	}
 
@@ -1660,6 +1670,9 @@ func handleImport(c *gin.Context) {
 			return err
 		}
 		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&CustomRule{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&HiddenSubscriptionResource{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&SubscriptionProfile{}).Error; err != nil {
@@ -1723,6 +1736,17 @@ func handleImport(c *gin.Context) {
 				data.Rules[i].ProfileID = defaultProfileID
 			}
 		}
+		for i := range data.HiddenResources {
+			data.HiddenResources[i].ID = 0
+			if mappedProfileID, ok := profileIDMap[data.HiddenResources[i].ProfileID]; ok && mappedProfileID > 0 {
+				data.HiddenResources[i].ProfileID = mappedProfileID
+			}
+			if data.HiddenResources[i].ProfileID == 0 {
+				data.HiddenResources[i].ProfileID = defaultProfileID
+			}
+			data.HiddenResources[i].ResourceType = strings.TrimSpace(data.HiddenResources[i].ResourceType)
+			data.HiddenResources[i].Name = strings.TrimSpace(data.HiddenResources[i].Name)
+		}
 
 		if len(data.Groups) > 0 {
 			if err := tx.Create(&data.Groups).Error; err != nil {
@@ -1736,6 +1760,14 @@ func handleImport(c *gin.Context) {
 		}
 		if len(data.Rules) > 0 {
 			if err := tx.Create(&data.Rules).Error; err != nil {
+				return err
+			}
+		}
+		for _, hiddenResource := range data.HiddenResources {
+			if hiddenResource.Name == "" || !isValidSubscriptionResourceType(hiddenResource.ResourceType) {
+				continue
+			}
+			if err := HideSubscriptionResourceTx(tx, hiddenResource.ProfileID, hiddenResource.ResourceType, hiddenResource.Name); err != nil {
 				return err
 			}
 		}
@@ -1887,6 +1919,272 @@ func handleUpdateResourceOrder(c *gin.Context) {
 	})
 }
 
+type subscriptionResourceWriteRequest struct {
+	ProfileID    uint                   `json:"profile_id"`
+	ResourceType string                 `json:"resource_type" binding:"required"`
+	Name         string                 `json:"name" binding:"required"`
+	Data         map[string]interface{} `json:"data"`
+}
+
+func normalizeSubscriptionResourceWriteRequest(req subscriptionResourceWriteRequest) (subscriptionResourceWriteRequest, error) {
+	req.ResourceType = strings.TrimSpace(req.ResourceType)
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		return req, fmt.Errorf("资源名称不能为空")
+	}
+	if !isValidSubscriptionResourceType(req.ResourceType) {
+		return req, fmt.Errorf("资源类型不支持")
+	}
+	if req.Data == nil {
+		req.Data = map[string]interface{}{}
+	}
+	return req, nil
+}
+
+func handleTakeoverSubscriptionResource(c *gin.Context) {
+	var req subscriptionResourceWriteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+	req, err := normalizeSubscriptionResourceWriteRequest(req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+	profileID, ok := resolveRequestProfileID(c, req.ProfileID)
+	if !ok {
+		return
+	}
+
+	var data interface{}
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		switch req.ResourceType {
+		case resourceOrderTypeNodes:
+			node, err := upsertTakenOverNodeTx(tx, profileID, req.Name, req.Data)
+			if err != nil {
+				return err
+			}
+			data = node
+		case resourceOrderTypeGroups:
+			group, err := upsertTakenOverGroupTx(tx, profileID, req.Name, req.Data)
+			if err != nil {
+				return err
+			}
+			data = group
+		default:
+			return fmt.Errorf("资源类型不支持")
+		}
+		if err := UnhideSubscriptionResourceTx(tx, profileID, req.ResourceType, req.Name); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "接管资源失败", "error": err.Error()})
+		return
+	}
+	ReapplyRulesToProfile(profileID)
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "资源已接管为自定义配置", "data": data})
+}
+
+func handleDeleteSubscriptionResource(c *gin.Context) {
+	var req subscriptionResourceWriteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+	req, err := normalizeSubscriptionResourceWriteRequest(req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+	profileID, ok := resolveRequestProfileID(c, req.ProfileID)
+	if !ok {
+		return
+	}
+
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := HideSubscriptionResourceTx(tx, profileID, req.ResourceType, req.Name); err != nil {
+			return err
+		}
+		switch req.ResourceType {
+		case resourceOrderTypeNodes:
+			if err := tx.Where("profile_id = ? AND name = ?", profileID, req.Name).Delete(&CustomNode{}).Error; err != nil {
+				return err
+			}
+		case resourceOrderTypeGroups:
+			if err := tx.Where("profile_id = ? AND name = ?", profileID, req.Name).Delete(&CustomProxyGroup{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&CustomRule{}).
+				Where("profile_id = ? AND target = ?", profileID, req.Name).
+				Update("target", deletedCustomRuleTarget).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除资源失败", "error": err.Error()})
+		return
+	}
+
+	ReapplyRulesToProfile(profileID)
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "资源已从当前配置隐藏"})
+}
+
+func upsertTakenOverNodeTx(tx *gorm.DB, profileID uint, fallbackName string, data map[string]interface{}) (CustomNode, error) {
+	configMap := cloneStringAnyMap(data)
+	name := strings.TrimSpace(valueAsString(configMap["name"]))
+	if name == "" {
+		name = fallbackName
+		configMap["name"] = name
+	}
+	nodeType := strings.TrimSpace(valueAsString(configMap["type"]))
+	if nodeType == "" {
+		nodeType = "unknown"
+		configMap["type"] = nodeType
+	}
+	server := strings.TrimSpace(valueAsString(configMap["server"]))
+	if server == "" {
+		server = "-"
+		configMap["server"] = server
+	}
+	port := valueAsInt(configMap["port"])
+	if port <= 0 {
+		port = 0
+		configMap["port"] = port
+	}
+
+	configBytes, err := json.Marshal(configMap)
+	if err != nil {
+		return CustomNode{}, err
+	}
+	node := CustomNode{
+		ProfileID: profileID,
+		Name:      name,
+		Type:      nodeType,
+		Server:    server,
+		Port:      port,
+		Config:    string(configBytes),
+	}
+	err = tx.Where("profile_id = ? AND name = ?", profileID, name).
+		Assign(node).
+		FirstOrCreate(&node).Error
+	return node, err
+}
+
+func upsertTakenOverGroupTx(tx *gorm.DB, profileID uint, fallbackName string, data map[string]interface{}) (CustomProxyGroup, error) {
+	groupMap := cloneStringAnyMap(data)
+	name := strings.TrimSpace(valueAsString(groupMap["name"]))
+	if name == "" {
+		name = fallbackName
+	}
+	groupType := strings.TrimSpace(valueAsString(groupMap["type"]))
+	if groupType == "" {
+		groupType = "select"
+	}
+	proxies := stringSliceFromAny(groupMap["proxies"])
+	if len(proxies) == 0 {
+		proxies = []string{"[ALL_NODES]"}
+	}
+	proxiesBytes, err := json.Marshal(proxies)
+	if err != nil {
+		return CustomProxyGroup{}, err
+	}
+	extra := map[string]interface{}{}
+	for key, value := range groupMap {
+		key = strings.TrimSpace(key)
+		if key == "" || copiedGroupProviderScopedExtraKeys[key] {
+			continue
+		}
+		switch key {
+		case "name", "type", "proxies":
+			continue
+		default:
+			extra[key] = value
+		}
+	}
+	extraBytes, err := json.Marshal(extra)
+	if err != nil {
+		return CustomProxyGroup{}, err
+	}
+	group := CustomProxyGroup{
+		ProfileID: profileID,
+		Name:      name,
+		Type:      groupType,
+		Proxies:   string(proxiesBytes),
+		Extra:     string(extraBytes),
+	}
+	err = tx.Where("profile_id = ? AND name = ?", profileID, name).
+		Assign(group).
+		FirstOrCreate(&group).Error
+	if err != nil {
+		return CustomProxyGroup{}, err
+	}
+	if err := tx.Model(&SubscriptionProfile{}).Where("id = ?", profileID).Update("groups_mode", profileGroupsModeMerge).Error; err != nil {
+		return CustomProxyGroup{}, err
+	}
+	return group, nil
+}
+
+func cloneStringAnyMap(input map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
+func valueAsInt(value interface{}) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case uint:
+		return int(v)
+	case uint64:
+		return int(v)
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	case string:
+		n, _ := strconv.Atoi(strings.TrimSpace(v))
+		return n
+	default:
+		n, _ := strconv.Atoi(valueAsString(v))
+		return n
+	}
+}
+
+func stringSliceFromAny(value interface{}) []string {
+	switch v := value.(type) {
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if item = strings.TrimSpace(item); item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if itemValue := valueAsString(item); itemValue != "" {
+				out = append(out, itemValue)
+			}
+		}
+		return out
+	default:
+		if itemValue := valueAsString(value); itemValue != "" {
+			return []string{itemValue}
+		}
+		return nil
+	}
+}
+
 // handleCreateCustomGroup 创建新策略组
 func handleCreateCustomGroup(c *gin.Context) {
 	var req struct {
@@ -1913,7 +2211,12 @@ func handleCreateCustomGroup(c *gin.Context) {
 		Proxies:   string(proxiesBytes),
 		Exclude:   req.Exclude,
 	}
-	if err := DB.Create(&group).Error; err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := UnhideSubscriptionResourceTx(tx, profileID, resourceOrderTypeGroups, group.Name); err != nil {
+			return err
+		}
+		return tx.Create(&group).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存失败", "error": err.Error()})
 		return
 	}
@@ -1943,12 +2246,23 @@ func handleUpdateCustomGroup(c *gin.Context) {
 		return
 	}
 
+	oldName := group.Name
 	group.Name = req.Name
 	group.Type = req.Type
 	group.Proxies = string(proxiesBytes)
 	group.Exclude = req.Exclude
 
-	if err := DB.Save(&group).Error; err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if strings.TrimSpace(oldName) != strings.TrimSpace(group.Name) {
+			if err := HideSubscriptionResourceTx(tx, group.ProfileID, resourceOrderTypeGroups, oldName); err != nil {
+				return err
+			}
+		}
+		if err := UnhideSubscriptionResourceTx(tx, group.ProfileID, resourceOrderTypeGroups, group.Name); err != nil {
+			return err
+		}
+		return tx.Save(&group).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新失败", "error": err.Error()})
 		return
 	}
@@ -1964,7 +2278,17 @@ func handleDeleteCustomGroup(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "代理组不存在"})
 		return
 	}
-	if err := DB.Delete(&group).Error; err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := HideSubscriptionResourceTx(tx, group.ProfileID, resourceOrderTypeGroups, group.Name); err != nil {
+			return err
+		}
+		if err := tx.Model(&CustomRule{}).
+			Where("profile_id = ? AND target = ?", group.ProfileID, group.Name).
+			Update("target", deletedCustomRuleTarget).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&group).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除失败", "error": err.Error()})
 		return
 	}
@@ -2038,7 +2362,12 @@ func handleCreateCustomNode(c *gin.Context) {
 		Port:      req.Port,
 		Config:    string(configBytes),
 	}
-	if err := DB.Create(&node).Error; err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := UnhideSubscriptionResourceTx(tx, profileID, resourceOrderTypeNodes, node.Name); err != nil {
+			return err
+		}
+		return tx.Create(&node).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存失败", "error": err.Error()})
 		return
 	}
@@ -2054,7 +2383,12 @@ func handleDeleteCustomNode(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "节点不存在"})
 		return
 	}
-	if err := DB.Delete(&node).Error; err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := HideSubscriptionResourceTx(tx, node.ProfileID, resourceOrderTypeNodes, node.Name); err != nil {
+			return err
+		}
+		return tx.Delete(&node).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除失败", "error": err.Error()})
 		return
 	}
@@ -2084,13 +2418,24 @@ func handleUpdateCustomNode(c *gin.Context) {
 		return
 	}
 
+	oldName := node.Name
 	node.Name = req.Name
 	node.Type = req.Type
 	node.Server = req.Server
 	node.Port = req.Port
 	node.Config = string(configBytes)
 
-	if err := DB.Save(&node).Error; err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if strings.TrimSpace(oldName) != strings.TrimSpace(node.Name) {
+			if err := HideSubscriptionResourceTx(tx, node.ProfileID, resourceOrderTypeNodes, oldName); err != nil {
+				return err
+			}
+		}
+		if err := UnhideSubscriptionResourceTx(tx, node.ProfileID, resourceOrderTypeNodes, node.Name); err != nil {
+			return err
+		}
+		return tx.Save(&node).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新失败", "error": err.Error()})
 		return
 	}
@@ -2531,6 +2876,9 @@ func injectCustomNodes(yamlContent string, profileID uint) string {
 
 	// 获取数据库里的自定义节点并无损注入
 	customNodes, _ := GetCustomNodes(profileID)
+	hiddenNodes := loadHiddenSubscriptionResourceNames(profileID, resourceOrderTypeNodes)
+	filterYAMLSequenceByName(proxiesNode, hiddenNodes, customNodeNameSet(customNodes))
+
 	var customProxyNodes []*yaml.Node
 	for _, cn := range customNodes {
 		var configMap map[string]interface{}
@@ -2581,6 +2929,16 @@ func injectCustomNodes(yamlContent string, profileID uint) string {
 	if len(customProxyNodes) > 0 {
 		// 自定义节点保持创建顺序前置，显式排序记录会在后续统一覆盖。
 		proxiesNode.Content = append(customProxyNodes, proxiesNode.Content...)
+	}
+
+	if proxyGroupsNode != nil && proxyGroupsNode.Kind == yaml.SequenceNode {
+		availableNames := yamlSequenceNameSet(proxiesNode)
+		for _, groupNode := range proxyGroupsNode.Content {
+			if name := yamlMappingName(groupNode); name != "" {
+				availableNames[name] = true
+			}
+		}
+		pruneProxyGroupMembers(proxyGroupsNode, availableNames)
 	}
 
 	// 转回 YAML 字符串
@@ -2654,6 +3012,9 @@ func injectCustomGroups(yamlContent string, profileID uint) string {
 
 	if shouldOverrideProfileProxyGroups(profileID, len(customGroups)) {
 		proxyGroupsNode.Content = nil
+	} else {
+		hiddenGroups := loadHiddenSubscriptionResourceNames(profileID, resourceOrderTypeGroups)
+		filterYAMLSequenceByName(proxyGroupsNode, hiddenGroups, customGroupNameSet(customGroups))
 	}
 
 	// 获取数据库里的自定义组并无损注入
@@ -2697,6 +3058,13 @@ func injectCustomGroups(yamlContent string, profileID uint) string {
 	}
 
 	// 自动清理因 dialer-proxy 引用自身代理组而产生的闭环
+	availableNames := yamlSequenceNameSet(proxiesNode)
+	for _, groupNode := range proxyGroupsNode.Content {
+		if name := yamlMappingName(groupNode); name != "" {
+			availableNames[name] = true
+		}
+	}
+	pruneProxyGroupMembers(proxyGroupsNode, availableNames)
 	autoPruneDialerProxyLoops(proxiesNode, proxyGroupsNode)
 
 	// 转回 YAML 字符串（保持原格式和注释）
@@ -2853,6 +3221,21 @@ func applyYAMLSequenceOrderByName(seq *yaml.Node, orderNames []string) {
 	seq.Content = ordered
 }
 
+func filterYAMLSequenceByName(seq *yaml.Node, hiddenNames map[string]bool, overrideNames map[string]bool) {
+	if seq == nil || seq.Kind != yaml.SequenceNode || (len(hiddenNames) == 0 && len(overrideNames) == 0) {
+		return
+	}
+	filtered := make([]*yaml.Node, 0, len(seq.Content))
+	for _, item := range seq.Content {
+		name := yamlMappingName(item)
+		if name != "" && (hiddenNames[name] || overrideNames[name]) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	seq.Content = filtered
+}
+
 func yamlMappingName(node *yaml.Node) string {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return ""
@@ -2863,6 +3246,77 @@ func yamlMappingName(node *yaml.Node) string {
 		}
 	}
 	return ""
+}
+
+func yamlSequenceNameSet(seq *yaml.Node) map[string]bool {
+	names := map[string]bool{}
+	if seq == nil || seq.Kind != yaml.SequenceNode {
+		return names
+	}
+	for _, item := range seq.Content {
+		if name := yamlMappingName(item); name != "" {
+			names[name] = true
+		}
+	}
+	return names
+}
+
+func customNodeNameSet(nodes []CustomNode) map[string]bool {
+	names := make(map[string]bool, len(nodes))
+	for _, node := range nodes {
+		if name := strings.TrimSpace(node.Name); name != "" {
+			names[name] = true
+		}
+	}
+	return names
+}
+
+func customGroupNameSet(groups []CustomProxyGroup) map[string]bool {
+	names := make(map[string]bool, len(groups))
+	for _, group := range groups {
+		if name := strings.TrimSpace(group.Name); name != "" {
+			names[name] = true
+		}
+	}
+	return names
+}
+
+func loadHiddenSubscriptionResourceNames(profileID uint, resourceType string) map[string]bool {
+	names, err := GetHiddenSubscriptionResourceNames(profileID, resourceType)
+	if err != nil {
+		log.Printf("load hidden resource warning: profile=%d type=%s err=%v", profileID, resourceType, err)
+		return map[string]bool{}
+	}
+	return names
+}
+
+func pruneProxyGroupMembers(proxyGroupsNode *yaml.Node, availableNames map[string]bool) {
+	if proxyGroupsNode == nil || proxyGroupsNode.Kind != yaml.SequenceNode {
+		return
+	}
+	for _, groupNode := range proxyGroupsNode.Content {
+		if groupNode.Kind != yaml.MappingNode {
+			continue
+		}
+		var proxiesSeq *yaml.Node
+		for i := 0; i < len(groupNode.Content)-1; i += 2 {
+			if groupNode.Content[i].Value == "proxies" {
+				proxiesSeq = groupNode.Content[i+1]
+				break
+			}
+		}
+		if proxiesSeq == nil || proxiesSeq.Kind != yaml.SequenceNode {
+			continue
+		}
+		filtered := make([]*yaml.Node, 0, len(proxiesSeq.Content))
+		for _, item := range proxiesSeq.Content {
+			member := strings.TrimSpace(item.Value)
+			if member == "" || availableNames[member] || isBuiltInProxyPolicy(member) {
+				filtered = append(filtered, item)
+			}
+		}
+		proxiesSeq.Content = filtered
+	}
 }
 
 // injectCustomRules 基于 yaml.v3 Node 树完成分流规则的强力接管、前置注入与原生去重
@@ -2916,6 +3370,36 @@ func ruleFingerprintFromParts(parts []string) string {
 	return strings.Join(parts, ",")
 }
 
+func ruleTargetPolicyFromParts(parts []string) string {
+	if len(parts) < 2 || parts[0] == "" {
+		return ""
+	}
+	if isTerminalRuleType(parts[0]) {
+		return strings.TrimSpace(strings.Join(parts[1:], ","))
+	}
+	if len(parts) < 3 {
+		return ""
+	}
+	targetIndex := len(parts) - 1
+	if isRuleOptionSuffix(parts[len(parts)-1]) && len(parts) >= 4 {
+		targetIndex = len(parts) - 2
+	}
+	return strings.TrimSpace(parts[targetIndex])
+}
+
+func yamlDocumentPolicyTargetNames(docNode *yaml.Node) map[string]bool {
+	names := yamlSequenceNameSet(findTopLevelSequenceNode(docNode, "proxies"))
+	for name := range yamlSequenceNameSet(findTopLevelSequenceNode(docNode, "proxy-groups")) {
+		names[name] = true
+	}
+	return names
+}
+
+func ruleTargetPolicyAvailable(policy string, availableNames map[string]bool) bool {
+	policy = strings.TrimSpace(policy)
+	return policy == "" || isBuiltInProxyPolicy(policy) || availableNames[policy]
+}
+
 func injectCustomRulesWithRules(yamlContent string, customRules []CustomRule) string {
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(yamlContent), &root); err != nil {
@@ -2956,6 +3440,7 @@ func injectCustomRulesWithRules(yamlContent string, customRules []CustomRule) st
 	var customRuleNodes []*yaml.Node
 	var customTerminalRuleNodes []*yaml.Node
 	hasCustomTerminalRule := false
+	availableTargets := yamlDocumentPolicyTargetNames(docNode)
 
 	for _, cr := range customRules {
 		ruleStr, fingerprint := customRuleLineAndFingerprint(cr)
@@ -2987,6 +3472,9 @@ func injectCustomRulesWithRules(yamlContent string, customRules []CustomRule) st
 		fingerprint := ruleFingerprintFromParts(parts)
 		isTerminalRule := len(parts) > 0 && isTerminalRuleType(parts[0])
 		if fingerprint != "" && customFingerprints[fingerprint] {
+			continue
+		}
+		if !ruleTargetPolicyAvailable(ruleTargetPolicyFromParts(parts), availableTargets) {
 			continue
 		}
 		if isTerminalRule {

@@ -115,6 +115,14 @@ type ProfileResourceOrder struct {
 	CreatedAt    int64  `gorm:"autoCreateTime"`
 }
 
+type HiddenSubscriptionResource struct {
+	ID           uint   `gorm:"primarykey"`
+	ProfileID    uint   `gorm:"not null;uniqueIndex:idx_hidden_subscription_resource"`
+	ResourceType string `gorm:"size:32;not null;uniqueIndex:idx_hidden_subscription_resource"`
+	Name         string `gorm:"size:512;not null;uniqueIndex:idx_hidden_subscription_resource"`
+	CreatedAt    int64  `gorm:"autoCreateTime"`
+}
+
 type SubscriptionProfile struct {
 	ID           uint   `gorm:"primarykey" json:"id"`
 	Name         string `gorm:"uniqueIndex;not null" json:"name"`
@@ -234,6 +242,7 @@ func initDB() {
 		&CustomNode{},
 		&CustomRule{},
 		&ProfileResourceOrder{},
+		&HiddenSubscriptionResource{},
 		&Subscription{},
 	)
 	if err != nil {
@@ -310,6 +319,10 @@ func isValidResourceOrderType(resourceType string) bool {
 	return resourceType == resourceOrderTypeNodes || resourceType == resourceOrderTypeGroups
 }
 
+func isValidSubscriptionResourceType(resourceType string) bool {
+	return isValidResourceOrderType(resourceType)
+}
+
 func cleanResourceOrderNames(names []string) []string {
 	cleaned := make([]string, 0, len(names))
 	seen := make(map[string]bool, len(names))
@@ -366,6 +379,54 @@ func GetProfileResourceOrderNames(profileID uint, resourceType string) ([]string
 		}
 	}
 	return names, nil
+}
+
+func GetHiddenSubscriptionResourceNames(profileID uint, resourceType string) (map[string]bool, error) {
+	if !isValidSubscriptionResourceType(resourceType) {
+		return nil, fmt.Errorf("资源类型不支持")
+	}
+	var resources []HiddenSubscriptionResource
+	err := DB.Where("profile_id = ? AND resource_type = ?", profileID, resourceType).Find(&resources).Error
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[string]bool, len(resources))
+	for _, resource := range resources {
+		if name := strings.TrimSpace(resource.Name); name != "" {
+			names[name] = true
+		}
+	}
+	return names, nil
+}
+
+func HideSubscriptionResourceTx(tx *gorm.DB, profileID uint, resourceType string, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("资源名称不能为空")
+	}
+	if !isValidSubscriptionResourceType(resourceType) {
+		return fmt.Errorf("资源类型不支持")
+	}
+	resource := HiddenSubscriptionResource{
+		ProfileID:    profileID,
+		ResourceType: resourceType,
+		Name:         name,
+	}
+	return tx.Where("profile_id = ? AND resource_type = ? AND name = ?", profileID, resourceType, name).
+		Assign(resource).
+		FirstOrCreate(&resource).Error
+}
+
+func UnhideSubscriptionResourceTx(tx *gorm.DB, profileID uint, resourceType string, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	if !isValidSubscriptionResourceType(resourceType) {
+		return fmt.Errorf("资源类型不支持")
+	}
+	return tx.Where("profile_id = ? AND resource_type = ? AND name = ?", profileID, resourceType, name).
+		Delete(&HiddenSubscriptionResource{}).Error
 }
 
 // GetCustomProxyGroups returns all custom proxy groups

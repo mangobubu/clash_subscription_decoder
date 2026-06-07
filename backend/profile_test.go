@@ -336,6 +336,63 @@ proxy-groups:
 	assertStringSliceEqual(t, names, []string{"兜底策略", "自动选择", "手动选择"})
 }
 
+func TestFilterYAMLSequenceByNameRemovesHiddenAndOverriddenItems(t *testing.T) {
+	content := `proxies:
+  - name: 订阅节点 A
+    type: ss
+  - name: 接管节点
+    type: vmess
+  - name: 保留节点
+    type: trojan
+`
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(content), &root); err != nil {
+		t.Fatalf("yaml.Unmarshal returned error: %v", err)
+	}
+	seq := findTopLevelSequenceNode(root.Content[0], "proxies")
+	filterYAMLSequenceByName(seq, map[string]bool{"订阅节点 A": true}, map[string]bool{"接管节点": true})
+
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		t.Fatalf("yaml.Marshal returned error: %v", err)
+	}
+	assertStringSliceEqual(t, yamlSequenceNames(t, string(out), "proxies"), []string{"保留节点"})
+}
+
+func TestPruneProxyGroupMembersRemovesUnavailableReferences(t *testing.T) {
+	content := `proxy-groups:
+  - name: 自动选择
+    type: select
+    proxies:
+      - 可用节点
+      - 已删节点
+      - 兜底策略
+      - 已删策略组
+      - DIRECT
+  - name: 兜底策略
+    type: fallback
+    proxies:
+      - 可用节点
+`
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(content), &root); err != nil {
+		t.Fatalf("yaml.Unmarshal returned error: %v", err)
+	}
+	seq := findTopLevelSequenceNode(root.Content[0], "proxy-groups")
+	pruneProxyGroupMembers(seq, map[string]bool{"可用节点": true, "自动选择": true, "兜底策略": true})
+
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		t.Fatalf("yaml.Marshal returned error: %v", err)
+	}
+	assertYAMLGroupProxiesEqual(t, string(out), "自动选择", []string{"可用节点", "兜底策略", "DIRECT"})
+}
+
+func TestStringSliceFromAnyNormalizesProxyMembers(t *testing.T) {
+	got := stringSliceFromAny([]interface{}{" 节点 A ", "", 123, "DIRECT"})
+	assertStringSliceEqual(t, got, []string{"节点 A", "123", "DIRECT"})
+}
+
 func TestBuildManualProfileYAMLFromResourcesKeepsSavedResourceOrder(t *testing.T) {
 	nodes := []CustomNode{
 		{
@@ -426,7 +483,13 @@ rules:
 }
 
 func TestInjectCustomRulesKeepsCustomTerminalRuleAtEnd(t *testing.T) {
-	content := `rules:
+	content := `proxies: []
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - DIRECT
+rules:
   - DOMAIN-SUFFIX,qq.com,Proxy
   - MATCH,Proxy
   - DOMAIN-SUFFIX,example.com,Proxy
@@ -441,6 +504,27 @@ func TestInjectCustomRulesKeepsCustomTerminalRuleAtEnd(t *testing.T) {
 		"DOMAIN-SUFFIX,qq.com,DIRECT",
 		"DOMAIN-SUFFIX,example.com,Proxy",
 		"MATCH,Leak",
+	})
+}
+
+func TestInjectCustomRulesDropsOriginalRulesWithDeletedTargets(t *testing.T) {
+	content := `proxies:
+  - name: 可用节点
+    type: ss
+proxy-groups:
+  - name: 可用策略
+    type: select
+    proxies:
+      - 可用节点
+rules:
+  - DOMAIN-SUFFIX,keep.example,可用策略
+  - DOMAIN-SUFFIX,drop.example,已删策略
+  - MATCH,已删策略
+`
+
+	got := injectCustomRulesWithRules(content, nil)
+	assertStringSliceEqual(t, yamlSequenceScalars(t, got, "rules"), []string{
+		"DOMAIN-SUFFIX,keep.example,可用策略",
 	})
 }
 

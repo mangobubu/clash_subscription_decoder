@@ -494,6 +494,8 @@ interface ProxyNode {
 
 type SortResourceType = "nodes" | "groups";
 
+type SubscriptionResourceType = SortResourceType;
+
 interface DragSortState {
   resourceType: SortResourceType;
   fromIndex: number;
@@ -989,6 +991,17 @@ const openCopyGroupsDialog = () => {
   copyGroupsDialogVisible.value = true;
 };
 
+const subscriptionResourcePayload = (
+  resourceType: SubscriptionResourceType,
+  name: string,
+  data: Record<string, any>,
+) => ({
+  profile_id: activeProfileId.value,
+  resource_type: resourceType,
+  name,
+  data,
+});
+
 const copyGroupsFromProfile = async () => {
   if (!activeProfileId.value || !copyGroupsSourceProfileId.value) {
     ElMessage.warning("请选择来源配置");
@@ -1015,7 +1028,7 @@ const copyGroupsFromProfile = async () => {
   }
 };
 
-const editCustomGroup = (groupName: string) => {
+const openCustomGroupEditor = (groupName: string) => {
   const customInfo = customGroupsDict.value[groupName];
   if (!customInfo) return;
   editingGroupId.value = customInfo.ID;
@@ -1032,11 +1045,45 @@ const editCustomGroup = (groupName: string) => {
   groupDialogVisible.value = true;
 };
 
-const deleteCustomGroup = (groupName: string) => {
-  const customInfo = customGroupsDict.value[groupName];
-  if (!customInfo) return;
+const editCustomGroup = async (group: any) => {
+  const groupName = group.name;
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
+  if (customGroupsDict.value[groupName]) {
+    openCustomGroupEditor(groupName);
+    return;
+  }
+  try {
+    const res = await axios.post(
+      buildBackendUrl("/api/subscription-resources/takeover"),
+      subscriptionResourcePayload("groups", groupName, group),
+    );
+    if (res.data.code === 200) {
+      ElMessage.success("订阅代理组已接管为自定义代理组，可继续编辑");
+      await fetchCustomData();
+      const takenOverName = res.data.data?.Name || res.data.data?.name || groupName;
+      openCustomGroupEditor(takenOverName);
+    } else {
+      ElMessage.error(res.data.message || "接管代理组失败");
+    }
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.message || "接管代理组失败");
+  }
+};
+
+const deleteCustomGroup = (group: any) => {
+  const groupName = group.name;
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
+  const isCustom = Boolean(customGroupsDict.value[groupName]);
   ElMessageBox.confirm(
-    `确定要删除自定义策略组 [${groupName}] 吗？`,
+    isCustom
+      ? `确定要删除自定义策略组 [${groupName}] 吗？`
+      : `确定要在当前配置中删除订阅策略组 [${groupName}] 吗？刷新订阅后也不会自动恢复。`,
     "安全提示",
     {
       confirmButtonText: "确定删除",
@@ -1046,11 +1093,12 @@ const deleteCustomGroup = (groupName: string) => {
   )
     .then(async () => {
       try {
-        const res = await axios.delete(
-          buildBackendUrl(`/api/custom-groups/${customInfo.ID}`),
+        const res = await axios.post(
+          buildBackendUrl("/api/subscription-resources/delete"),
+          subscriptionResourcePayload("groups", groupName, group),
         );
         if (res.data.code === 200) {
-          ElMessage.success("自定义策略组已成功删除！");
+          ElMessage.success(isCustom ? "自定义策略组已成功删除！" : "订阅策略组已从当前配置隐藏！");
           await fetchCustomData();
           if (activeProfileId.value) {
             await loadSubscription({ preferredTab: "groups" });
@@ -1188,7 +1236,7 @@ const openNodeDialog = () => {
   nodeActiveTab.value = "link";
 };
 
-const editCustomNode = (nodeName: string) => {
+const openCustomNodeEditor = (nodeName: string) => {
   const customInfo = customNodesDict.value[nodeName];
   if (!customInfo) return;
   editingNodeId.value = customInfo.ID;
@@ -1207,11 +1255,45 @@ const editCustomNode = (nodeName: string) => {
   nodeDialogVisible.value = true;
 };
 
-const deleteCustomNode = (nodeName: string) => {
-  const customInfo = customNodesDict.value[nodeName];
-  if (!customInfo) return;
+const editCustomNode = async (node: ProxyNode) => {
+  const nodeName = node.name;
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
+  if (customNodesDict.value[nodeName]) {
+    openCustomNodeEditor(nodeName);
+    return;
+  }
+  try {
+    const res = await axios.post(
+      buildBackendUrl("/api/subscription-resources/takeover"),
+      subscriptionResourcePayload("nodes", nodeName, node.details || {}),
+    );
+    if (res.data.code === 200) {
+      ElMessage.success("订阅节点已接管为自定义节点，可继续编辑");
+      await fetchCustomData();
+      const takenOverName = res.data.data?.Name || res.data.data?.name || nodeName;
+      openCustomNodeEditor(takenOverName);
+    } else {
+      ElMessage.error(res.data.message || "接管节点失败");
+    }
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.message || "接管节点失败");
+  }
+};
+
+const deleteCustomNode = (node: ProxyNode) => {
+  const nodeName = node.name;
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
+  const isCustom = Boolean(customNodesDict.value[nodeName]);
   ElMessageBox.confirm(
-    `确定要彻底删除自定义节点 [${nodeName}] 吗？`,
+    isCustom
+      ? `确定要彻底删除自定义节点 [${nodeName}] 吗？`
+      : `确定要在当前配置中删除订阅节点 [${nodeName}] 吗？刷新订阅后也不会自动恢复。`,
     "安全提示",
     {
       confirmButtonText: "立即销毁",
@@ -1221,11 +1303,12 @@ const deleteCustomNode = (nodeName: string) => {
   )
     .then(async () => {
       try {
-        const res = await axios.delete(
-          buildBackendUrl(`/api/custom-nodes/${customInfo.ID}`),
+        const res = await axios.post(
+          buildBackendUrl("/api/subscription-resources/delete"),
+          subscriptionResourcePayload("nodes", nodeName, node.details || {}),
         );
         if (res.data.code === 200) {
-          ElMessage.success("自定义节点已被彻底删除！");
+          ElMessage.success(isCustom ? "自定义节点已被彻底删除！" : "订阅节点已从当前配置隐藏！");
           await fetchCustomData();
           if (activeProfileId.value) {
             await loadSubscription({ preferredTab: "nodes" });
@@ -2345,24 +2428,20 @@ const submitChangePassword = async () => {
                         node.name
                       }}</span>
                     </div>
-                    <div
-                      v-if="customNodesDict[node.name]"
-                      class="custom-actions"
-                      style="display: flex; gap: 4px"
-                    >
+                    <div class="custom-actions" style="display: flex; gap: 4px">
                       <el-button
                         type="primary"
                         link
                         :icon="Edit"
-                        @click="editCustomNode(node.name)"
-                        title="编辑云端节点"
+                        @click="editCustomNode(node)"
+                        :title="customNodesDict[node.name] ? '编辑自定义节点' : '编辑并接管订阅节点'"
                       ></el-button>
                       <el-button
                         type="danger"
                         link
                         :icon="Delete"
-                        @click="deleteCustomNode(node.name)"
-                        title="删除云端节点"
+                        @click="deleteCustomNode(node)"
+                        :title="customNodesDict[node.name] ? '删除自定义节点' : '删除订阅节点'"
                       ></el-button>
                     </div>
                   </div>
@@ -2481,24 +2560,20 @@ const submitChangePassword = async () => {
                         >{{ group.type }}</el-tag
                       >
                     </div>
-                    <div
-                      v-if="customGroupsDict[group.name]"
-                      class="custom-actions"
-                      style="display: flex; gap: 4px"
-                    >
+                    <div class="custom-actions" style="display: flex; gap: 4px">
                       <el-button
                         type="primary"
                         link
                         :icon="Edit"
-                        @click="editCustomGroup(group.name)"
-                        title="编辑策略组"
+                        @click="editCustomGroup(group)"
+                        :title="customGroupsDict[group.name] ? '编辑自定义策略组' : '编辑并接管订阅策略组'"
                       ></el-button>
                       <el-button
                         type="danger"
                         link
                         :icon="Delete"
-                        @click="deleteCustomGroup(group.name)"
-                        title="删除策略组"
+                        @click="deleteCustomGroup(group)"
+                        :title="customGroupsDict[group.name] ? '删除自定义策略组' : '删除订阅策略组'"
                       ></el-button>
                     </div>
                   </div>
