@@ -184,41 +184,47 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: #0f172a; /* 深蓝色背景 */
+  padding: 24px;
+  background:
+    radial-gradient(circle at 12% 10%, rgba(14, 165, 233, 0.18), transparent 34%),
+    radial-gradient(circle at 88% 90%, rgba(16, 185, 129, 0.12), transparent 30%),
+    #07111f;
   position: relative;
   overflow: hidden;
   font-family: 'Inter', system-ui, sans-serif;
+  box-sizing: border-box;
 }
 
 /* 动态流光背景元素 */
 .bg-shape {
   position: absolute;
-  filter: blur(100px);
+  filter: blur(90px);
   z-index: 0;
-  animation: float 20s infinite alternate ease-in-out;
+  animation: float 22s infinite alternate ease-in-out;
+  opacity: 0.42;
 }
 
 .shape1 {
-  width: 500px;
-  height: 500px;
-  background: rgba(56, 189, 248, 0.4);
+  width: 420px;
+  height: 420px;
+  background: rgba(14, 165, 233, 0.34);
   top: -100px;
   left: -100px;
 }
 
 .shape2 {
-  width: 400px;
-  height: 400px;
-  background: rgba(139, 92, 246, 0.4);
+  width: 360px;
+  height: 360px;
+  background: rgba(20, 184, 166, 0.28);
   bottom: -50px;
   right: -50px;
   animation-delay: -5s;
 }
 
 .shape3 {
-  width: 300px;
-  height: 300px;
-  background: rgba(236, 72, 153, 0.3);
+  width: 260px;
+  height: 260px;
+  background: rgba(148, 163, 184, 0.18);
   top: 40%;
   left: 50%;
   animation-delay: -10s;
@@ -234,14 +240,14 @@ onMounted(() => {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 420px;
-  padding: 40px;
-  background: rgba(30, 41, 59, 0.7);
+  max-width: 430px;
+  padding: 34px;
+  background: rgba(12, 24, 38, 0.84);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 24px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
   animation: slideUpFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   opacity: 0;
   transform: translateY(20px);
@@ -256,16 +262,16 @@ onMounted(() => {
 
 .login-header {
   text-align: center;
-  margin-bottom: 30px;
+  margin-bottom: 28px;
 }
 
 .login-header h2 {
   margin: 0;
-  font-size: 28px;
+  font-size: 26px;
   font-weight: 700;
   color: #f8fafc;
-  letter-spacing: -0.5px;
-  background: linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%);
+  letter-spacing: 0;
+  background: linear-gradient(135deg, #e0f2fe 0%, #7dd3fc 52%, #a7f3d0 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -275,7 +281,7 @@ onMounted(() => {
   margin: 8px 0 0;
   font-size: 14px;
   color: #94a3b8;
-  letter-spacing: 1px;
+  letter-spacing: 0;
 }
 
 .login-form {
@@ -284,17 +290,16 @@ onMounted(() => {
   gap: 6px;
 }
 
-/* 深度定制 input 样式，融入暗黑拟态风格 */
 :deep(.el-input__wrapper) {
-  background-color: rgba(15, 23, 42, 0.6) !important;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1) inset !important;
-  border-radius: 12px;
+  background-color: rgba(7, 17, 31, 0.76) !important;
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.18) inset !important;
+  border-radius: 10px;
   transition: all 0.3s ease;
 }
 
 :deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 1px #38bdf8 inset !important;
-  background-color: rgba(15, 23, 42, 0.8) !important;
+  box-shadow: 0 0 0 1px #38bdf8 inset, 0 0 0 4px rgba(56, 189, 248, 0.1) !important;
+  background-color: rgba(7, 17, 31, 0.9) !important;
 }
 
 :deep(.el-input__inner) {
@@ -307,19 +312,22 @@ onMounted(() => {
   gap: 12px;
   align-items: center;
   width: 100%;
+  min-width: 0;
 }
 
 .captcha-input {
   flex: 1;
+  min-width: 0;
 }
 
 .captcha-img-box {
-  width: 140px;
+  width: 132px;
   height: 48px;
-  border-radius: 12px;
+  flex: 0 0 132px;
+  border-radius: 10px;
   overflow: hidden;
-  background: rgba(15, 23, 42, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(7, 17, 31, 0.76);
+  border: 1px solid rgba(148, 163, 184, 0.18);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -341,24 +349,56 @@ onMounted(() => {
 .submit-btn {
   width: 100%;
   height: 48px;
-  border-radius: 12px;
+  border-radius: 10px;
   font-size: 16px;
   font-weight: 600;
-  letter-spacing: 1px;
-  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  letter-spacing: 0;
+  background: linear-gradient(135deg, #0284c7 0%, #0ea5e9 55%, #14b8a6 100%);
   border: none;
   margin-top: 10px;
   transition: all 0.3s ease;
-  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4);
+  box-shadow: 0 12px 26px rgba(14, 165, 233, 0.24);
 }
 
 .submit-btn:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.6);
+  box-shadow: 0 16px 34px rgba(14, 165, 233, 0.34);
   opacity: 0.95;
 }
 
 .submit-btn:active {
   transform: translateY(0);
+}
+
+@media (max-width: 640px) {
+  .login-container {
+    align-items: stretch;
+    padding: 14px;
+  }
+
+  .login-box {
+    align-self: center;
+    max-width: 100%;
+    padding: 24px 18px;
+    border-radius: 14px;
+  }
+
+  .login-header h2 {
+    font-size: 22px;
+  }
+
+  .captcha-wrapper {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .captcha-img-box {
+    width: 100%;
+    flex-basis: 48px;
+  }
+
+  .bg-shape {
+    opacity: 0.28;
+  }
 }
 </style>

@@ -11,6 +11,12 @@ import {
   Plus,
   MoreFilled,
   Select,
+  Refresh,
+  CopyDocument,
+  Download,
+  Upload,
+  Lock,
+  SwitchButton,
 } from "@element-plus/icons-vue";
 import axios from "axios";
 import { Codemirror } from "vue-codemirror";
@@ -20,6 +26,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import jsYaml from "js-yaml";
 import Login from "./Login.vue";
+import IconTooltipButton from "./components/IconTooltipButton.vue";
 import { buildBackendUrl, buildPublicBackendUrl } from "./config/backend";
 
 const isLoggedIn = ref(false);
@@ -2054,6 +2061,26 @@ const handleUserCommand = async (command: string) => {
   }
 };
 
+const handleMobileActionCommand = (command: string) => {
+  if (command === "addNode") {
+    openNodeDialog();
+    return;
+  }
+  if (command === "addGroup") {
+    openGroupDialog();
+    return;
+  }
+  if (command === "addRule") {
+    openRuleDialog();
+    return;
+  }
+  if (command === "copyGroups") {
+    openCopyGroupsDialog();
+    return;
+  }
+  void handleUserCommand(command);
+};
+
 const submitChangePassword = async () => {
   if (!passwordFormRef.value) return;
   
@@ -2149,10 +2176,10 @@ const submitChangePassword = async () => {
           </span>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="backupData">⬇️ 备份数据</el-dropdown-item>
-              <el-dropdown-item command="importData">⬆️ 导入备份</el-dropdown-item>
-              <el-dropdown-item divided command="changePassword">🔑 修改密码</el-dropdown-item>
-              <el-dropdown-item divided command="logout">🚪 退出登录</el-dropdown-item>
+              <el-dropdown-item command="backupData" :icon="Download">备份数据</el-dropdown-item>
+              <el-dropdown-item command="importData" :icon="Upload">导入备份</el-dropdown-item>
+              <el-dropdown-item divided command="changePassword" :icon="Lock">修改密码</el-dropdown-item>
+              <el-dropdown-item divided command="logout" :icon="SwitchButton">退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -2179,38 +2206,33 @@ const submitChangePassword = async () => {
 	              当前订阅链接、节点、策略组和规则都跟随所选配置独立生效。
 	            </p>
 	          </div>
-	          <div class="profiles-actions">
-	            <el-button type="primary" icon="Plus" @click="openCreateProfileDialog">
-	              新增配置
-	            </el-button>
-	            <el-button
+	          <div class="profiles-actions icon-action-row" aria-label="配置快捷操作">
+	            <IconTooltipButton
+	              label="新增配置"
+	              type="primary"
+	              :icon="Plus"
+	              @click="openCreateProfileDialog"
+	            />
+	            <IconTooltipButton
+	              label="刷新当前配置"
 	              :disabled="!currentProfile"
-	              icon="Refresh"
+	              :icon="Refresh"
 	              :loading="isLoading"
 	              @click="refreshCurrentProfile"
-	            >
-	              刷新当前
-	            </el-button>
-	            <el-button
+	            />
+	            <IconTooltipButton
+	              label="从其他配置复制代理组"
 	              type="warning"
 	              plain
-	              icon="CopyDocument"
 	              :disabled="copyGroupSourceOptions.length === 0"
+	              :icon="CopyDocument"
 	              @click="openCopyGroupsDialog"
-	            >
-	              复制代理组
-	            </el-button>
+	            />
 	          </div>
-	          <div v-if="currentProfile?.source_type === 'local'" class="manual-config-actions">
-	            <el-button type="primary" plain icon="Plus" @click="openNodeDialog">
-	              添加节点
-	            </el-button>
-	            <el-button type="success" plain icon="Plus" @click="openGroupDialog">
-	              添加代理组
-	            </el-button>
-	            <el-button type="warning" plain icon="Plus" @click="openRuleDialog">
-	              添加规则
-	            </el-button>
+	          <div v-if="currentProfile?.source_type === 'local'" class="manual-config-actions icon-action-row" aria-label="本地配置新增操作">
+	            <IconTooltipButton label="添加节点" type="primary" plain :icon="Plus" @click="openNodeDialog" />
+	            <IconTooltipButton label="添加代理组" type="success" plain :icon="Plus" @click="openGroupDialog" />
+	            <IconTooltipButton label="添加规则" type="warning" plain :icon="Plus" @click="openRuleDialog" />
 	          </div>
 	        </div>
 
@@ -2233,12 +2255,22 @@ const submitChangePassword = async () => {
 	              {{ profile.source_type === 'local' ? '不依赖订阅地址' : profile.url }}
 	            </div>
 	            <div class="profile-actions" @click.stop>
-	              <el-button size="small" icon="Edit" text @click="openEditProfileDialog(profile)">
-	                编辑
-	              </el-button>
-	              <el-button size="small" icon="Delete" text type="danger" @click="deleteProfile(profile)">
-	                删除
-	              </el-button>
+	              <IconTooltipButton
+	                label="编辑配置"
+	                size="small"
+	                text
+	                type="primary"
+	                :icon="Edit"
+	                @click="openEditProfileDialog(profile)"
+	              />
+	              <IconTooltipButton
+	                label="删除配置"
+	                size="small"
+	                text
+	                type="danger"
+	                :icon="Delete"
+	                @click="deleteProfile(profile)"
+	              />
 	            </div>
 	          </button>
 	        </div>
@@ -2275,34 +2307,31 @@ const submitChangePassword = async () => {
             </template>
           </el-input>
 
-          <div class="button-group">
-	            <el-button
+          <div class="button-group icon-action-row" aria-label="订阅处理操作">
+	            <IconTooltipButton
 	              v-if="hasSubscription"
+	              :label="currentProfile?.source_type === 'local' ? '生成本地订阅' : '刷新订阅'"
 	              type="success"
-	              @click="currentProfile?.source_type === 'local' ? refreshCurrentProfile() : handleDecode()"
+	              :icon="Refresh"
 	              :loading="isLoading"
-	              class="action-btn"
-	            >
-	              {{ currentProfile?.source_type === 'local' ? '生成本地订阅' : '刷新订阅' }}
-	            </el-button>
-	            <el-button
+	              @click="currentProfile?.source_type === 'local' ? refreshCurrentProfile() : handleDecode()"
+	            />
+	            <IconTooltipButton
 	              v-else
+	              :label="currentProfile?.source_type === 'local' ? '生成本地预览' : '抓取并解码'"
 	              type="primary"
-	              @click="currentProfile?.source_type === 'local' ? refreshCurrentProfile() : handleDecode()"
+	              :icon="Download"
 	              :loading="isLoading"
-	              class="action-btn"
-	            >
-	              {{ currentProfile?.source_type === 'local' ? '生成本地预览' : '一键抓取并解码' }}
-	            </el-button>
-	            <el-button
+	              @click="currentProfile?.source_type === 'local' ? refreshCurrentProfile() : handleDecode()"
+	            />
+	            <IconTooltipButton
+	              label="Mock 快速测试"
 	              type="info"
 	              plain
-	              @click="handleQuickMock"
+	              :icon="Link"
 	              :disabled="isLoading || currentProfile?.source_type === 'local'"
-	              class="mock-btn"
-	            >
-              Mock 快速测试
-            </el-button>
+	              @click="handleQuickMock"
+	            />
           </div>
         </div>
 
@@ -2351,42 +2380,32 @@ const submitChangePassword = async () => {
             </div>
 
             <div class="result-actions">
-              <el-button-group class="result-action-group">
-                <el-button
-                  size="default"
-                  icon="CopyDocument"
-                  class="result-action-button result-action-button--copy"
+              <div class="result-action-group icon-action-row" aria-label="结果操作">
+                <IconTooltipButton
+                  label="复制明文配置"
+                  :icon="CopyDocument"
                   @click="handleCopy"
-                >
-                  复制明文
-                </el-button>
-                <el-button
-                  size="default"
-                  icon="Download"
-                  class="result-action-button result-action-button--export"
+                />
+                <IconTooltipButton
+                  label="导出 YAML"
+                  :icon="Download"
                   @click="handleDownload"
-                >
-                  导出 YAML
-                </el-button>
-                <el-button
-                  size="default"
-                  icon="Link"
-                  class="result-action-button result-action-button--link"
-                  @click="copyCurrentSubLink"
+                />
+                <IconTooltipButton
+                  label="复制订阅地址"
+                  type="warning"
+                  :icon="Link"
                   :loading="isCopyingSubLink"
-                >
-                  复制订阅地址
-                </el-button>
-                <el-button
-                  size="default"
-                  icon="Refresh"
-                  class="result-action-button result-action-button--danger"
-                  @click="regenerateSubLink"
+                  @click="copyCurrentSubLink"
+                />
+                <IconTooltipButton
+                  label="重新生成订阅"
+                  type="danger"
+                  :icon="Refresh"
                   :loading="isGeneratingSubLink"
-                >
-                  重新生成订阅
-                </el-button>
-              </el-button-group>
+                  @click="regenerateSubLink"
+                />
+              </div>
             </div>
           </div>
 
@@ -2412,15 +2431,12 @@ const submitChangePassword = async () => {
                 <el-tag v-if="isSavingNodeOrder" type="warning" effect="dark">
                   排序保存中...
                 </el-tag>
-                <el-button
+                <IconTooltipButton
+                  label="新增自定义节点"
                   type="success"
-                  effect="dark"
-                  round
+                  :icon="Plus"
                   @click="openNodeDialog"
-                >
-                  <span style="margin-right: 4px; font-weight: bold">+</span> ✨
-                  新增自定义节点
-                </el-button>
+                />
               </div>
               <div class="nodes-grid">
                 <div
@@ -2463,20 +2479,22 @@ const submitChangePassword = async () => {
                       }}</span>
                     </div>
                     <div class="custom-actions" style="display: flex; gap: 4px">
-                      <el-button
+                      <IconTooltipButton
+                        :label="customNodesDict[node.name] ? '编辑自定义节点' : '编辑并接管订阅节点'"
                         type="primary"
                         link
+                        size="small"
                         :icon="Edit"
                         @click="editCustomNode(node)"
-                        :title="customNodesDict[node.name] ? '编辑自定义节点' : '编辑并接管订阅节点'"
-                      ></el-button>
-                      <el-button
+                      />
+                      <IconTooltipButton
+                        :label="customNodesDict[node.name] ? '删除自定义节点' : '删除订阅节点'"
                         type="danger"
                         link
+                        size="small"
                         :icon="Delete"
                         @click="deleteCustomNode(node)"
-                        :title="customNodesDict[node.name] ? '删除自定义节点' : '删除订阅节点'"
-                      ></el-button>
+                      />
                     </div>
                   </div>
                   <div class="node-card-body">
@@ -2531,24 +2549,20 @@ const submitChangePassword = async () => {
                 <el-tag v-if="isSavingGroupOrder" type="warning" effect="dark">
                   排序保存中...
                 </el-tag>
-                <el-button
+                <IconTooltipButton
+                  label="从其他配置复制代理组"
                   type="warning"
                   plain
-                  round
                   :disabled="copyGroupSourceOptions.length === 0"
+                  :icon="CopyDocument"
                   @click="openCopyGroupsDialog"
-                >
-                  从其他配置复制代理组
-                </el-button>
-                <el-button
+                />
+                <IconTooltipButton
+                  label="新增自定义策略组"
                   type="primary"
-                  effect="dark"
-                  round
+                  :icon="Plus"
                   @click="openGroupDialog"
-                >
-                  <span style="margin-right: 4px; font-weight: bold">+</span>
-                  新增自定义策略组
-                </el-button>
+                />
               </div>
 
               <div class="groups-grid">
@@ -2595,20 +2609,22 @@ const submitChangePassword = async () => {
                       >
                     </div>
                     <div class="custom-actions" style="display: flex; gap: 4px">
-                      <el-button
+                      <IconTooltipButton
+                        :label="customGroupsDict[group.name] ? '编辑自定义策略组' : '编辑并接管订阅策略组'"
                         type="primary"
                         link
+                        size="small"
                         :icon="Edit"
                         @click="editCustomGroup(group)"
-                        :title="customGroupsDict[group.name] ? '编辑自定义策略组' : '编辑并接管订阅策略组'"
-                      ></el-button>
-                      <el-button
+                      />
+                      <IconTooltipButton
+                        :label="customGroupsDict[group.name] ? '删除自定义策略组' : '删除订阅策略组'"
                         type="danger"
                         link
+                        size="small"
                         :icon="Delete"
                         @click="deleteCustomGroup(group)"
-                        :title="customGroupsDict[group.name] ? '删除自定义策略组' : '删除订阅策略组'"
-                      ></el-button>
+                      />
                     </div>
                   </div>
                   <div class="group-card-body">
@@ -2664,29 +2680,29 @@ const submitChangePassword = async () => {
                     </div>
 
                     <div class="rules-primary-actions">
-                      <el-button
+                      <IconTooltipButton
                         v-if="hasDirtyRules"
+                        :label="`应用修改（${dirtyRuleCount}）`"
                         type="success"
-                        round
                         :icon="Select"
                         :loading="isSubmittingRule"
                         @click="batchSaveRules"
-                      >
-                        应用修改 ({{ dirtyRuleCount }})
-                      </el-button>
-                      <el-button
+                      />
+                      <IconTooltipButton
+                        label="新增规则"
                         type="primary"
-                        round
                         :icon="Plus"
                         @click="openRuleDialog"
-                      >
-                        新增规则
-                      </el-button>
+                      />
                       <el-dropdown trigger="click" @command="handleRuleToolbarCommand">
-                        <el-button class="rules-more-button" round :icon="MoreFilled">
-                          更多操作
-                          <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-                        </el-button>
+                        <el-tooltip content="更多规则操作" placement="top" effect="dark" popper-class="app-tooltip">
+                          <el-button
+                            class="rules-more-button"
+                            circle
+                            :icon="MoreFilled"
+                            aria-label="更多规则操作"
+                          />
+                        </el-tooltip>
                         <template #dropdown>
                           <el-dropdown-menu>
                             <el-dropdown-item
@@ -2757,15 +2773,14 @@ const submitChangePassword = async () => {
                           />
                         </el-option-group>
                       </el-select>
-                      <el-button
+                      <IconTooltipButton
+                        label="设置筛选结果"
                         type="primary"
                         plain
-                        round
                         :disabled="!bulkRuleTarget || !hasFilteredRules"
+                        :icon="Select"
                         @click="applyBulkRuleTargetToFilteredRules"
-                      >
-                        设置筛选结果
-                      </el-button>
+                      />
                     </div>
                   </div>
                 </div>
@@ -2844,21 +2859,23 @@ const submitChangePassword = async () => {
                   <el-table-column label="操作" width="120" fixed="right">
                     <template #default="scope">
                       <div style="display: flex; gap: 4px">
-                        <el-button
+                        <IconTooltipButton
+                          :label="isCustomRule(scope.row) ? '高级编辑' : '高级编辑并接管'"
                           type="primary"
                           link
+                          size="small"
                           :icon="Edit"
                           @click="editRule(scope.row)"
-                          :title="isCustomRule(scope.row) ? '高级编辑' : '高级编辑并接管'"
-                        ></el-button>
-                        <el-button
+                        />
+                        <IconTooltipButton
                           v-if="isCustomRule(scope.row)"
+                          label="移除接管（恢复原生）"
                           type="danger"
                           link
+                          size="small"
                           :icon="Delete"
                           @click="deleteCustomRule(scope.row)"
-                          title="移除接管 (恢复原生)"
-                        ></el-button>
+                        />
                       </div>
                     </template>
                   </el-table-column>
@@ -2914,6 +2931,58 @@ const submitChangePassword = async () => {
         </section>
       </transition>
 	    </main>
+
+      <nav class="mobile-action-bar glass-card" aria-label="移动端快捷操作">
+        <IconTooltipButton
+          label="新增配置"
+          type="primary"
+          :icon="Plus"
+          @click="openCreateProfileDialog"
+        />
+        <IconTooltipButton
+          :label="hasSubscription ? '刷新当前订阅' : '抓取并解码'"
+          type="success"
+          :disabled="!currentProfile"
+          :icon="Refresh"
+          :loading="isLoading"
+          @click="currentProfile?.source_type === 'local' ? refreshCurrentProfile() : handleDecode()"
+        />
+        <IconTooltipButton
+          label="复制订阅地址"
+          type="warning"
+          :disabled="!activeProfileId"
+          :icon="Link"
+          :loading="isCopyingSubLink"
+          @click="copyCurrentSubLink"
+        />
+        <el-dropdown trigger="click" @command="handleMobileActionCommand">
+          <el-tooltip content="更多操作" placement="top" effect="dark" popper-class="app-tooltip">
+            <el-button
+              class="mobile-more-button"
+              circle
+              :icon="MoreFilled"
+              aria-label="更多操作"
+            />
+          </el-tooltip>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="addNode">添加节点</el-dropdown-item>
+              <el-dropdown-item command="addGroup">添加代理组</el-dropdown-item>
+              <el-dropdown-item command="addRule">添加规则</el-dropdown-item>
+              <el-dropdown-item
+                command="copyGroups"
+                :disabled="copyGroupSourceOptions.length === 0"
+              >
+                复制代理组
+              </el-dropdown-item>
+              <el-dropdown-item divided command="backupData">备份数据</el-dropdown-item>
+              <el-dropdown-item command="importData">导入备份</el-dropdown-item>
+              <el-dropdown-item divided command="changePassword">修改密码</el-dropdown-item>
+              <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </nav>
 
 	    <!-- 配置新增/编辑弹窗 -->
 	    <el-dialog
@@ -3052,39 +3121,39 @@ const submitChangePassword = async () => {
           </el-select>
         </el-form-item>
         <el-form-item label="配置包含的目标代理">
-          <div style="margin-bottom: 12px; display: flex; gap: 10px">
-            <el-button
+          <div class="dialog-icon-actions" aria-label="策略组快捷填充">
+            <IconTooltipButton
+              label="注入全部最新节点 [ALL_NODES]"
               size="small"
               type="primary"
               plain
+              :icon="Download"
               @click="selectAllNodes"
-            >
-              注入全部最新节点 [ALL_NODES]
-            </el-button>
-            <el-button
+            />
+            <IconTooltipButton
+              label="引入所有现有策略组"
               size="small"
               type="info"
               plain
+              :icon="CopyDocument"
               @click="selectAllExistingGroups"
-            >
-              引入所有现有策略组
-            </el-button>
-            <el-button
+            />
+            <IconTooltipButton
+              label="加入 DIRECT 直连"
               size="small"
               type="success"
               plain
+              :icon="Select"
               @click="selectDirectPolicy"
-            >
-              加入 DIRECT 直连
-            </el-button>
-            <el-button
+            />
+            <IconTooltipButton
+              label="加入 REJECT 拒绝"
               size="small"
               type="danger"
               plain
+              :icon="Delete"
               @click="selectRejectPolicy"
-            >
-              加入 REJECT 拒绝
-            </el-button>
+            />
           </div>
           <el-select
             v-model="newGroupForm.proxies"
@@ -3180,13 +3249,14 @@ const submitChangePassword = async () => {
               :rows="4"
               placeholder="请粘贴您的节点链接..."
             ></el-input>
-            <div style="margin-top: 15px; text-align: right">
-              <el-button
+            <div class="dialog-icon-actions dialog-icon-actions--end">
+              <IconTooltipButton
+                label="一键解析链接"
                 type="primary"
-                @click="parseNodeLink"
+                :icon="Download"
                 :loading="isParsingLink"
-                >一键解析链接</el-button
-              >
+                @click="parseNodeLink"
+              />
             </div>
           </div>
         </el-tab-pane>
@@ -3416,7 +3486,12 @@ const submitChangePassword = async () => {
               class="copy-input"
             >
               <template #append>
-                <el-button icon="CopyDocument" @click="copySubLink" type="primary">复制</el-button>
+                <IconTooltipButton
+                  label="复制 Clash / Mihomo 订阅地址"
+                  type="primary"
+                  :icon="CopyDocument"
+                  @click="copySubLink"
+                />
               </template>
             </el-input>
           </div>
@@ -3430,7 +3505,12 @@ const submitChangePassword = async () => {
               class="copy-input"
             >
               <template #append>
-                <el-button icon="CopyDocument" @click="copySurgeLatestSubLink" type="warning">复制</el-button>
+                <IconTooltipButton
+                  label="复制 Surge 最新版配置地址"
+                  type="warning"
+                  :icon="CopyDocument"
+                  @click="copySurgeLatestSubLink"
+                />
               </template>
             </el-input>
           </div>
@@ -3444,7 +3524,12 @@ const submitChangePassword = async () => {
               class="copy-input"
             >
               <template #append>
-                <el-button icon="CopyDocument" @click="copySurge576SubLink" type="warning">复制</el-button>
+                <IconTooltipButton
+                  label="复制 Surge 5.7.6 兼容配置地址"
+                  type="warning"
+                  :icon="CopyDocument"
+                  @click="copySurge576SubLink"
+                />
               </template>
             </el-input>
           </div>
@@ -3452,14 +3537,14 @@ const submitChangePassword = async () => {
             <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">
               Shadowrocket 配置地址
             </div>
-            <el-button
-              type="success"
-              icon="Link"
-              style="width: 100%; margin-bottom: 10px;"
-              @click="installShadowrocketConfig"
-            >
-              安装到 Shadowrocket
-            </el-button>
+            <div class="sub-link-primary-action">
+              <IconTooltipButton
+                label="安装到 Shadowrocket"
+                type="success"
+                :icon="Link"
+                @click="installShadowrocketConfig"
+              />
+            </div>
             <el-input
               v-model="shadowrocketInstallLink"
               readonly
@@ -3467,7 +3552,12 @@ const submitChangePassword = async () => {
               style="margin-bottom: 10px;"
             >
               <template #append>
-                <el-button icon="CopyDocument" @click="copyShadowrocketInstallLink" type="success">复制安装链接</el-button>
+                <IconTooltipButton
+                  label="复制 Shadowrocket 安装链接"
+                  type="success"
+                  :icon="CopyDocument"
+                  @click="copyShadowrocketInstallLink"
+                />
               </template>
             </el-input>
             <el-input
@@ -3476,7 +3566,12 @@ const submitChangePassword = async () => {
               class="copy-input"
             >
               <template #append>
-                <el-button icon="CopyDocument" @click="copyShadowrocketSubLink" type="success">复制</el-button>
+                <IconTooltipButton
+                  label="复制 Shadowrocket 配置地址"
+                  type="success"
+                  :icon="CopyDocument"
+                  @click="copyShadowrocketSubLink"
+                />
               </template>
             </el-input>
           </div>
@@ -4649,5 +4744,327 @@ const submitChangePassword = async () => {
 
 :deep(.el-dropdown-menu__item.el-dropdown-menu__item--divided) {
   border-top-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+/* 专业控制台响应式改版覆盖层 */
+.icon-action-row,
+.dialog-icon-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dialog-icon-actions {
+  margin-bottom: 12px;
+}
+
+.dialog-icon-actions--end {
+  justify-content: flex-end;
+  margin-top: 15px;
+}
+
+.app-container {
+  max-width: 1280px;
+  padding: 24px;
+  gap: 22px;
+}
+
+.main-header {
+  position: sticky;
+  top: 16px;
+  z-index: 10;
+  padding: 16px 20px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.profiles-panel,
+.control-panel,
+.result-panel {
+  padding: 22px;
+}
+
+.profiles-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.profiles-actions,
+.manual-config-actions,
+.button-group,
+.rules-primary-actions,
+.rules-batch-controls {
+  gap: 8px;
+}
+
+.profile-card {
+  border-color: rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.52);
+}
+
+.profile-actions,
+.custom-actions {
+  align-items: center;
+}
+
+.result-action-group {
+  padding: 4px;
+  border-radius: 12px;
+}
+
+.result-action-group :deep(.el-button) {
+  width: 40px;
+  height: 40px;
+  padding: 0 !important;
+  border-radius: 10px !important;
+}
+
+.nodes-header-actions,
+.groups-header-actions {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+  flex-wrap: wrap;
+}
+
+.rules-more-button,
+.mobile-more-button {
+  width: 40px;
+  height: 40px;
+  border-color: rgba(148, 163, 184, 0.2) !important;
+  background: rgba(15, 23, 42, 0.36) !important;
+  color: var(--text-secondary) !important;
+}
+
+.rules-more-button:hover,
+.rules-more-button:focus,
+.mobile-more-button:hover,
+.mobile-more-button:focus {
+  border-color: rgba(56, 189, 248, 0.38) !important;
+  color: #e0f2fe !important;
+  background: rgba(56, 189, 248, 0.1) !important;
+}
+
+.copy-input :deep(.el-input-group__append) {
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.copy-input :deep(.el-input-group__append .el-button) {
+  width: 42px;
+  min-width: 42px;
+  height: 100%;
+  border-radius: 0 !important;
+}
+
+.sub-link-primary-action {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.mobile-action-bar {
+  display: none;
+}
+
+:deep(.app-tooltip) {
+  max-width: min(260px, calc(100vw - 32px));
+}
+
+:deep(.glass-dialog) {
+  width: min(var(--dialog-width, 720px), calc(100vw - 32px)) !important;
+  max-height: calc(100vh - 32px);
+  margin: 16px auto !important;
+  display: flex;
+  flex-direction: column;
+}
+
+:deep(.glass-dialog .el-dialog__body) {
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 22px;
+}
+
+:deep(.glass-dialog .el-dialog__footer) {
+  padding: 14px 22px 18px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+@media (max-width: 900px) {
+  .app-container {
+    padding: 18px 14px 92px;
+  }
+
+  .main-header {
+    position: static;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .logo-title {
+    font-size: 16px;
+  }
+
+  .status-indicator {
+    margin-right: 0 !important;
+  }
+
+  .profiles-header {
+    grid-template-columns: 1fr;
+  }
+
+  .profiles-actions,
+  .manual-config-actions {
+    justify-content: flex-start;
+  }
+
+  .rules-container {
+    padding: 14px;
+  }
+
+  .custom-table {
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-container {
+    padding: 12px 10px 92px;
+    gap: 14px;
+  }
+
+  .main-header,
+  .profiles-panel,
+  .control-panel,
+  .result-panel,
+  .skeleton-wrapper {
+    padding: 14px;
+    border-radius: 12px;
+  }
+
+  .main-header {
+    flex-direction: column;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .username-text,
+  .status-indicator {
+    display: none !important;
+  }
+
+  .section-title {
+    font-size: 18px;
+  }
+
+  .section-desc {
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+
+  .profiles-grid,
+  .nodes-grid,
+  .groups-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .result-header,
+  .rules-toolbar-main,
+  .rules-batch-panel {
+    align-items: stretch;
+  }
+
+  .meta-info {
+    gap: 10px;
+  }
+
+  .result-actions,
+  .result-action-group,
+  .rules-filter-group,
+  .rules-primary-actions,
+  .rules-batch-controls {
+    width: 100%;
+  }
+
+  .profiles-actions :deep(.el-button),
+  .manual-config-actions :deep(.el-button),
+  .result-action-group :deep(.el-button),
+  .rules-primary-actions :deep(.el-button),
+  .rules-batch-controls :deep(.el-button),
+  .dialog-icon-actions :deep(.el-button) {
+    width: 42px;
+    min-width: 42px;
+  }
+
+  .result-action-group,
+  .rules-primary-actions,
+  .rules-batch-controls {
+    display: flex;
+    justify-content: flex-start;
+  }
+
+  .custom-tabs :deep(.el-tabs__nav-wrap) {
+    overflow-x: auto;
+  }
+
+  .custom-tabs :deep(.el-tabs__item) {
+    padding: 0 12px !important;
+    font-size: 13px !important;
+    white-space: nowrap;
+  }
+
+  .custom-table :deep(.el-table__body-wrapper),
+  .custom-table :deep(.el-table__header-wrapper) {
+    overflow-x: auto;
+  }
+
+  .pagination-wrapper {
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .mobile-action-bar {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    gap: 8px;
+    padding: 8px;
+    border-radius: 14px;
+  }
+
+  :deep(.glass-dialog) {
+    width: calc(100vw - 20px) !important;
+    max-height: calc(100vh - 20px);
+    margin: 10px auto !important;
+    border-radius: 12px !important;
+  }
+
+  :deep(.glass-dialog .el-dialog__header),
+  :deep(.glass-dialog .el-dialog__body),
+  :deep(.glass-dialog .el-dialog__footer) {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  :deep(.glass-dialog .el-dialog__footer .el-button) {
+    min-height: 40px;
+  }
 }
 </style>
