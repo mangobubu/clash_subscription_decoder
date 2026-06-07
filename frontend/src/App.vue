@@ -3602,7 +3602,14 @@ const submitChangePassword = async () => {
         </div>
       </div>
       <template #footer>
-        <el-button @click="subLinkDialogVisible = false" type="primary" plain>我知道了</el-button>
+        <el-button
+          class="sub-link-close-button"
+          @click="subLinkDialogVisible = false"
+          type="primary"
+          plain
+        >
+          关闭
+        </el-button>
       </template>
     </el-dialog>
 
@@ -5070,6 +5077,25 @@ const submitChangePassword = async () => {
 :deep(.glass-dialog .el-dialog__footer) {
   padding: 14px 22px 18px;
   border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.sub-link-dialog-shell :deep(.sub-link-close-button) {
+  border-color: rgba(56, 189, 248, 0.42) !important;
+  background: rgba(14, 165, 233, 0.14) !important;
+  color: #e0f2fe !important;
+}
+
+.sub-link-dialog-shell :deep(.sub-link-close-button:hover),
+.sub-link-dialog-shell :deep(.sub-link-close-button:focus) {
+  border-color: rgba(56, 189, 248, 0.72) !important;
+  background: rgba(14, 165, 233, 0.28) !important;
+  color: #ffffff !important;
+}
+
+.sub-link-dialog-shell :deep(.sub-link-close-button:active) {
+  border-color: rgba(2, 132, 199, 0.78) !important;
+  background: rgba(2, 132, 199, 0.32) !important;
+  color: #ffffff !important;
 }
 
 @media (max-width: 900px) {
