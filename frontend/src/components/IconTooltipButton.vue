@@ -53,10 +53,10 @@ const handleClick = (event: MouseEvent) => {
   >
     <el-button
       class="icon-tooltip-button"
+      :class="{ 'icon-tooltip-button--with-label': Boolean($slots.default) }"
       :aria-label="ariaLabel || label"
       :circle="circle"
       :disabled="disabled"
-      :icon="icon"
       :link="link"
       :loading="loading"
       :plain="plain"
@@ -66,6 +66,9 @@ const handleClick = (event: MouseEvent) => {
       :type="type === 'default' ? undefined : type"
       @click="handleClick"
     >
+      <el-icon v-if="!loading" class="icon-tooltip-button__icon">
+        <component :is="icon" />
+      </el-icon>
       <span v-if="$slots.default" class="icon-tooltip-button__label">
         <slot />
       </span>
@@ -78,9 +81,15 @@ const handleClick = (event: MouseEvent) => {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  gap: 6px;
+  gap: 0;
   flex: 0 0 auto;
+  box-sizing: border-box;
+  vertical-align: middle;
   line-height: 1 !important;
+}
+
+.icon-tooltip-button--with-label {
+  gap: 6px;
 }
 
 .icon-tooltip-button:not(.is-link):not(.is-text) {
@@ -89,12 +98,22 @@ const handleClick = (event: MouseEvent) => {
 }
 
 .icon-tooltip-button.is-circle {
+  min-width: 40px;
   width: 40px;
   height: 40px;
   padding: 0 !important;
 }
 
-.icon-tooltip-button :deep(.el-icon) {
+.icon-tooltip-button.is-circle :deep(> span:empty) {
+  display: none !important;
+  margin: 0 !important;
+}
+
+.icon-tooltip-button.is-circle :deep(.el-icon + span) {
+  margin-left: 0 !important;
+}
+
+.icon-tooltip-button__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -104,9 +123,10 @@ const handleClick = (event: MouseEvent) => {
   margin: 0;
   font-size: 20px;
   line-height: 1;
+  pointer-events: none;
 }
 
-.icon-tooltip-button :deep(.el-icon svg) {
+.icon-tooltip-button__icon :deep(svg) {
   display: block;
   width: 20px;
   height: 20px;
@@ -116,9 +136,12 @@ const handleClick = (event: MouseEvent) => {
   stroke-linejoin: round;
   stroke-width: 28;
   paint-order: stroke fill;
+  transform-origin: center;
 }
 
 .icon-tooltip-button__label {
+  display: inline-flex;
+  align-items: center;
   margin-left: 0;
   line-height: 1;
 }
@@ -130,12 +153,13 @@ const handleClick = (event: MouseEvent) => {
   }
 
   .icon-tooltip-button.is-circle {
+    min-width: 42px;
     width: 42px;
     height: 42px;
   }
 
-  .icon-tooltip-button :deep(.el-icon),
-  .icon-tooltip-button :deep(.el-icon svg) {
+  .icon-tooltip-button__icon,
+  .icon-tooltip-button__icon :deep(svg) {
     width: 21px;
     height: 21px;
     font-size: 21px;
