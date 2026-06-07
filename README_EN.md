@@ -1,217 +1,263 @@
-# ClashSubAST - Subscription Customization & Secure Dynamic Distribution Platform
+# ClashSubAST - Subscription Customization & Secure Distribution Platform
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.20%2B-00ADD8?style=flat-square&logo=go" alt="Go Version">
+  <img src="https://img.shields.io/badge/Go-1.26%2B-00ADD8?style=flat-square&logo=go" alt="Go Version">
   <img src="https://img.shields.io/badge/Vue-3.x-4FC08D?style=flat-square&logo=vue.js" alt="Vue Version">
-  <img src="https://img.shields.io/badge/Vite-5.x-646CFF?style=flat-square&logo=vite" alt="Vite Version">
-  <img src="https://img.shields.io/badge/SQLite-3-003B57?style=flat-square&logo=sqlite" alt="SQLite Version">
+  <img src="https://img.shields.io/badge/Vite-8.x-646CFF?style=flat-square&logo=vite" alt="Vite Version">
+  <img src="https://img.shields.io/badge/PostgreSQL-13%2B-4169E1?style=flat-square&logo=postgresql" alt="PostgreSQL Version">
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License">
 </p>
 
-`ClashSubAST` is a specialized **subscription parsing, custom merging, and secure dynamic distribution platform** designed specifically for Clash/Mihomo clients.
+`ClashSubAST` is a self-hosted subscription management platform for Clash/Mihomo, Surge, and Shadowrocket. It brings remote subscriptions, local manual profiles, custom nodes, proxy groups, routing rules, and multi-client output formats into one visual dashboard. It is designed for users who need to maintain multiple proxy configurations over time while reducing subscription link leakage risk.
 
-Traditional online subscription conversion services pose severe privacy leakage risks and lack the capability to save personalized configurations persistently. This project aims to offer a **privately deployed, secure, and losslessly dynamically synthesized** ultimate solution.
+Traditional online subscription converters rarely preserve personalized configuration and require exposing subscription content to third-party services. This project focuses on storing configuration in your own environment, generating secure profile-specific subscription links, and keeping the last usable output available when refreshes fail.
 
 ---
 
 ## 🌟 Core Features
 
-- 🔒 **Privacy-Preserving Token Authentication**  
-  The generated subscription link integrates secure Token authentication (consisting of the generation user, timestamp, and a cryptographically strong random salt). Adheres to the **Sole-Validity Mechanism**: whenever a new subscription link is generated, the older Token is permanently revoked immediately, protecting your subscription from unauthorized access.
-- ⚡ **Lossless Dynamic Synthesis (AST Parsing)**  
-  When a client requests a subscription link, the backend **refreshes and fetches the upstream subscription in real time**. It then seamlessly merges these nodes with your custom nodes, strategic groups, and personalized rules stored in the local database to compose and output the final Clash YAML config.
-- 🛡️ **Upstream Failover & Disaster Recovery**  
-  If the upstream subscription server is temporarily unreachable due to network fluctuations, the system **automatically falls back to using the last successfully cached historical subscription** to complete the synthesis, ensuring that your proxy software never loses internet connectivity.
-- 🎨 **Beautiful Web Control Panel**  
-  A modern, elegant dashboard built using **Vue 3 + Vite + Element Plus**. Supports visual management of nodes, proxies, and custom split-routing rules, integrated with a high-fidelity popup for one-click secure subscription link generation and copying.
+- 🔒 **Profile-Level Token Authentication**
+  Each subscription profile has its own token. Regenerating a token immediately invalidates the old URL. Copying a subscription URL only reads the current token and does not overwrite it.
+
+- 🧩 **Structured YAML Merge & Local Takeover**
+  The backend uses `yaml.v3` node trees to process Clash/Mihomo YAML, then reapplies custom nodes, proxy groups, rules, ordering, and hidden subscription resources. Subscription resources can be taken over as local resources and maintained independently per profile.
+
+- 🔄 **Remote Refresh With Cached Fallback**
+  Remote profiles try to fetch the upstream subscription and update the cache when refreshed or requested by a client. If the upstream source is unavailable and a previous generated result exists, the server returns the latest cached output. Local manual profiles do not request upstream sources; they generate YAML from manually maintained nodes, groups, and rules.
+
+- 🗂️ **Multi-Profile Isolation**
+  Create multiple remote or local profiles. Nodes, groups, rules, resource ordering, hidden records, and subscription tokens are isolated per profile, making it practical to maintain different clients or routing strategies.
+
+- 📲 **Multi-Client Subscription Output**
+  One profile can output Clash/Mihomo YAML, Surge latest configuration, Surge 5.7.6 compatible configuration, Shadowrocket configuration, and a Shadowrocket install entry.
+
+- 🎛️ **Visual Control Panel**
+  The frontend is built with Vue 3, Vite, Element Plus, and CodeMirror. It supports subscription previews, proxy link parsing, resource drag sorting, batch rule save/delete, cross-profile group and rule copy, remote rule localization, backup, and import.
 
 ---
 
 ## 🏗️ Architecture & Workflow
 
-The system is composed of an administration frontend and a highly concurrent Go backend communicating seamlessly via RESTful APIs.
-
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Client as Clash Client
-    participant Server as Go Backend Service
-    participant DB as SQLite Database
-    participant Upper as Upstream Provider
+    actor Client as Proxy Client
+    participant Server as Go Backend
+    participant DB as PostgreSQL
+    participant Upper as Remote Upstream
 
-    Client->>Server: GET /sub?token=xxx (Trigger Subscription Update)
-    rect rgb(240, 248, 255)
-        note over Server, DB: Safety Interception & Verification
-        Server->>DB: Validate Token & Find Corresponding User
-        alt Token Verification Failed
-            Server-->>Client: 401 Unauthorized (Deny Access)
-        end
-    end
-    
-    rect rgb(245, 255, 250)
-        note over Server, Upper: Real-time Fetch & Failover
-        Server->>Upper: HTTP request to pull latest subscription
-        alt Pull Successful
-            Upper-->>Server: Return latest Base64/YAML nodes
-            Server->>DB: Cache decoded upstream data locally
-        else Network Timeout / Connection Failed
-            Server->>DB: Fetch last successfully cached upstream data (Failover)
-        end
+    Client->>Server: GET /sub?token=xxx or /surge.conf?token=xxx
+    Server->>DB: Validate profile token and load profile
+    alt Invalid or expired token
+        Server-->>Client: 401 Unauthorized
     end
 
-    rect rgb(255, 250, 240)
-        note over Server, DB: Lossless Config Merge (AST)
-        Server->>DB: Read custom nodes, policy groups & routing rules
-        Server->>Server: Dynamically inject custom configs into node lists
-        Server->>Server: Synthesize and output the final Clash YAML
+    alt Remote profile
+        Server->>Upper: Fetch remote subscription content
+        alt Refresh succeeds
+            Server->>Server: Decode Base64/YAML/proxy URI content
+            Server->>DB: Store raw response and generated YAML cache
+        else Refresh fails and cache exists
+            Server->>DB: Read latest successfully generated YAML cache
+        else Refresh fails and no cache exists
+            Server-->>Client: 502 Bad Gateway
+        end
+    else Local manual profile
+        Server->>DB: Read local nodes, groups, and rules
+        Server->>Server: Generate Clash/Mihomo YAML
+        Server->>DB: Store generated result
     end
-    
-    Server-->>Client: 200 OK (Render YAML Configuration, Content-Type: text/yaml)
+
+    Server->>DB: Apply custom nodes, groups, rules, ordering, and hidden records
+    alt Shadowrocket / Surge output
+        Server->>Server: Convert final Clash YAML to target .conf
+        Server-->>Client: 200 OK text/plain
+    else Clash / Mihomo output
+        Server-->>Client: 200 OK text/yaml
+    end
 ```
 
 ---
 
 ## 🛠️ Technology Stack
 
-- **Frontend**:
-  - Core Framework: Vue 3 (Composition API)
-  - Build Tool: Vite
-  - Programming Language: TypeScript
-  - State Management: Pinia
-  - UI Library: Element Plus
-  - HTTP Client: Axios
+- **Frontend**
+  - Vue 3 + TypeScript
+  - Vite
+  - Element Plus
+  - Axios
+  - CodeMirror YAML editor
+  - js-yaml
 
-- **Backend**:
-  - Programming Language: Go 1.20+
-  - Web Framework: Gin
-  - Database ORM: GORM (SQLite 3 Driver)
-  - Live Reload Tool: Air
+- **Backend**
+  - Go 1.26+
+  - Gin
+  - GORM
+  - PostgreSQL
+  - `gopkg.in/yaml.v3`
+  - base64Captcha
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Clone Project & Prerequisites
-Ensure that [Node.js (16+)](https://nodejs.org/) and [Go (1.20+)](https://go.dev/) are installed on your machine.
+### 1. Prerequisites
+
+Prepare the following first:
+
+- [Go 1.26+](https://go.dev/)
+- [Node.js 20+](https://nodejs.org/)
+- PostgreSQL database
+- `pnpm` or `npm`
 
 ```bash
 git clone https://github.com/mangobubu/clash_proxy.git
 cd clash_proxy
 ```
 
-### 2. Backend Service Setup
-The backend utilizes SQLite 3 for storage. No dedicated database installation is required; `gorm.db` will be auto-generated in the `backend` directory upon startup.
+### 2. Backend Configuration & Run
+
+The backend reads `config.toml` from its current working directory. In development, the backend is usually run from the `backend` directory, so copy the template and fill in your PostgreSQL connection first:
 
 ```bash
 cd backend
-# Download and tidy up dependencies
+cp config.example.toml config.toml
+```
+
+Key options:
+
+```toml
+[server]
+port = 8080
+
+[database]
+host = "127.0.0.1"
+user = "your_username"
+password = "your_password"
+dbname = "clash_proxy"
+port = 5432
+sslmode = "disable"
+timezone = "Asia/Shanghai"
+
+[auth]
+captcha_enabled = true
+```
+
+Run the development backend:
+
+```bash
 go mod tidy
-
-# Method A: Live Reload with Air in Development
-# (Ensure Air is installed: go install github.com/air-verse/air@latest)
-air
-
-# Method B: Direct Compilation or Run
 go run main.go
 ```
-The backend server listens on `http://localhost:8080` by default.
 
-### 3. Frontend Service Setup
+The backend listens on `http://localhost:8080` by default.
+
+### 3. Frontend Development
+
 ```bash
 cd ../frontend
-
-# Install pnpm if not already installed
-npm install -g pnpm
-
-# Install dependencies
 pnpm install
-
-# Run Frontend Development Server
 pnpm dev
 ```
-The frontend application will be served at `http://localhost:5173`. The local development setup is pre-configured with a Vite reverse proxy to forward `/api` requests to backend APIs at `http://localhost:8080/api`.
 
-### 4. Production Build & One-File Deployment
+If `pnpm` is not installed, use `npm install` and `npm run dev`. The frontend development server runs at `http://localhost:5173` by default and accesses backend `/api` routes through the Vite proxy.
 
-The system supports **one-stop full-stack automated packaging**. To provide you with the most frictionless deployment experience, the project includes a cross-platform build utility written in pure Go. Once the build completes, all operational assets (including the standalone executable binary with fully embedded frontend and the default configuration file) will be automatically gathered into the unified **`release`** output directory at the project root.
+---
 
-#### Step 1: One-Click Full-Stack Build
-You do not need to compile frontend and backend separately, nor do you need to manually copy any configuration files. Simply run the following command in the project **root directory**:
+## 📦 Production Build
+
+The project root contains a Go-based build script:
+
 ```bash
 go run build.go
 ```
-The build system will automatically discover your local package manager (prioritizing `pnpm`, falling back to `npm` if not found), install frontend packages, build production assets, compile the Go application, and consolidate everything inside the `release` folder.
 
-#### Step 2: Run Full-Stack Server
-Upon successful compilation, you only need to copy the **`release`** folder to your production server. The folder layout is structured as follows:
+The build script will:
+
+- Detect and use `pnpm`, falling back to `npm` when needed
+- Install frontend dependencies
+- Build frontend production assets
+- Compile the backend binary
+- Collect runtime artifacts into the root `release` directory
+- Generate `release/config.toml` from `backend/config.example.toml` on the first build without overwriting it on later builds
+
+Output layout:
+
 ```text
 release/
-├── ClashSubAST         # Standalone executable with embedded frontend (ClashSubAST.exe on Windows)
-├── config.toml         # Generated initial configuration file (protected, subsequent builds will not overwrite your edits)
-└── config.example.toml # Backup configuration template
+├── ClashSubAST         # ClashSubAST.exe on Windows
+└── config.toml         # Runtime configuration
 ```
-Navigate to the directory and run the executable to launch the full-stack server instantly:
-```bash
-cd release
-# Run the full-stack server (filename will be ./ClashSubAST.exe on Windows)
-./ClashSubAST
-```
-Once started, visit `http://localhost:8080` in your browser to access both the administrative web interface and the background APIs instantly. No need to deploy frontend assets separately via Nginx or other web servers!
+
+Run the binary from inside the `release` directory. Make sure the PostgreSQL connection in `config.toml` is correct.
 
 ---
 
 ## 📖 User Guide
 
-1. **Sign Up & Sign In**  
-   On your first visit to the admin page, type your desired username and password to automatically register and log in.
-2. **Import Upstream Subscriptions**  
-   Set up your primary proxy subscription URL in the dashboard. The system will automatically fetch, decode, and visualize all proxy nodes.
-3. **Customize Configurations**  
-   - Add your own **custom proxy nodes** manually via the interface.
-   - Configure your preferred **filtering rules** (e.g., Direct, Global Proxy, China Direct, AdBlock, etc.).
-4. **Generate Secure Subscription Links**  
-   - Click the prominent **[Generate Subscription]** button.
-   - A modal will emerge containing your unique subscription URL with a secure `token` query parameter (e.g., `http://localhost:8080/sub?token=xxx`).
-   - Click **[Copy Link]** and paste it directly into your proxy clients (e.g., Clash Verge, Mihomo Party, Clash for Windows, etc.).
-   - **Note**: Regenerating the link will immediately invalidate the previous Token, nullifying external access if your link was accidentally leaked.
+1. **Initialize Administrator**
+   On the first visit, the console enters initialization mode. Create an administrator account, then log in with it. Captcha can be enabled or disabled through the `[auth]` section in `config.toml`.
+
+2. **Create Profiles**
+   Two profile types are supported:
+   - **Remote subscription**: provide an upstream subscription URL. The backend fetches, decodes, and generates final Clash/Mihomo YAML when refreshed.
+   - **Local manual**: no upstream URL is required. Nodes, groups, and rules are maintained directly in the dashboard.
+
+3. **Maintain Nodes, Groups, and Rules**
+   Add custom nodes, parse proxy links, edit proxy groups, maintain routing rules, batch save rules, batch delete rules, and take over subscription nodes or groups as local resources.
+
+4. **Sort and Hide Subscription Resources**
+   Nodes and groups support drag sorting. Deleting a subscription resource records it as hidden, so it will not automatically return after refresh. Taken-over resources are managed as local custom resources.
+
+5. **Reuse Across Profiles**
+   Copy proxy groups or rules from other profiles, or localize rules from a remote subscription so they can be maintained directly in the current profile.
+
+6. **Generate Subscription URLs**
+   Each profile can regenerate its own token. The subscription dialog provides:
+   - Clash / Mihomo YAML: `/sub?token=xxx`
+   - Surge latest: `/surge.conf?token=xxx`
+   - Surge 5.7.6: `/surge-5.7.6.conf?token=xxx`
+   - Shadowrocket config: `/shadowrocket.conf?token=xxx`
+   - Shadowrocket install entry: `/shadowrocket/install?token=xxx`
+
+7. **Backup and Import**
+   The console supports exporting data backups and importing backup JSON files. If an import fails, the backend rolls back the database transaction.
 
 ---
 
-## 🐳 Docker & Docker Compose Instant Deployment Guide
+## 🐳 Docker Compose Deployment
 
-If you wish to utilize Docker for lightweight one-click deployment and management in your production environment, the project has built-in premium containerization support:
-- **Multi-stage Build Dockerfile**: The compilation environment and the production runtime environment are physically isolated, keeping the final production image size at approximately 50MB.
-- **One-click Orchestration**: Spin up the ClashSubAST main service and the persistent PostgreSQL database in unison, with built-in database readiness health checks and service dependencies.
+The current `docker-compose.yml` targets a production environment with an existing PostgreSQL database and an existing external Docker network. Before use, update these values for your environment:
 
-### 1. Instant Startup
-On a server with Docker and Docker Compose installed, you only need to perform the following two simple steps to complete the rapid full-stack deployment:
+- `DB_HOST`
+- `DB_USER`
+- `DB_PASSWORD`
+- `DB_NAME`
+- `DB_PORT`
+- `DB_SSLMODE`
+- `DB_TIMEZONE`
+- `SERVER_PORT`
+- `networks.1panel-network.external`
+
+Start the service:
 
 ```bash
-# Step 1: Copy and use the default configuration file optimized for the Docker container network
-cp config.docker.toml config.toml
-
-# Step 2: Spin up all services in the background (including the high-concurrency Go application and the PostgreSQL database)
 docker compose up -d
 ```
 
-### 2. Container Service Lifecycle Management
+Common management commands:
+
 ```bash
-# View the running status, ports, and health status of all container services (automatically verifies database readiness)
 docker compose ps
-
-# Real-time tracking and streaming of container logs
 docker compose logs -f
-
-# Gracefully stop and remove the container cluster (data is persistently saved via Docker volume, keeping it completely safe)
 docker compose down
+docker compose up -d --build
 ```
 
-### 3. Data Backup & Config Maintenance
-* **Configuration Update**: You can modify the `config.toml` file directly on the host machine. After editing, run `docker compose restart app` to restart the application container and apply the updates.
-* **Database Persistence**: The database records are securely stored in the Docker Named Volume `clash-sub-ast-pgdata`. Even if the container cluster is completely removed and recreated, your data remains safe and sound.
+Note: the current Compose file does not create a PostgreSQL container or the external network automatically. Ensure both are available first, or adjust the Compose file for your deployment environment.
 
 ---
 
 ## 📄 License
 
-This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for more details.
+This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.

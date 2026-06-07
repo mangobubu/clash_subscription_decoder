@@ -1,222 +1,260 @@
-# ClashSubAST 订阅定制与安全动态分发平台
+# ClashSubAST 订阅定制与安全分发平台
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.20%2B-00ADD8?style=flat-square&logo=go" alt="Go Version">
+  <img src="https://img.shields.io/badge/Go-1.26%2B-00ADD8?style=flat-square&logo=go" alt="Go Version">
   <img src="https://img.shields.io/badge/Vue-3.x-4FC08D?style=flat-square&logo=vue.js" alt="Vue Version">
-  <img src="https://img.shields.io/badge/Vite-5.x-646CFF?style=flat-square&logo=vite" alt="Vite Version">
-  <img src="https://img.shields.io/badge/SQLite-3-003B57?style=flat-square&logo=sqlite" alt="SQLite Version">
+  <img src="https://img.shields.io/badge/Vite-8.x-646CFF?style=flat-square&logo=vite" alt="Vite Version">
+  <img src="https://img.shields.io/badge/PostgreSQL-13%2B-4169E1?style=flat-square&logo=postgresql" alt="PostgreSQL Version">
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License">
 </p>
 
-`ClashSubAST` 是一个专为 Clash/Mihomo 客户端量身定制的**订阅解析、自定义合并与安全动态分发平台**。
+`ClashSubAST` 是一个面向 Clash/Mihomo、Surge 与 Shadowrocket 的私有化订阅管理平台。它把远程订阅、本地手动配置、自定义节点、策略组、分流规则和多客户端格式输出集中到一个可视化后台中，适合需要长期维护多套代理配置并降低订阅链接泄漏风险的个人或小团队。
 
-传统的在线订阅转换服务存在巨大的隐私泄漏隐患，且无法持久化保存个性化配置。本项目旨在提供一个**私有化部署、安全可控、无损动态合成**的终极解决方案。
+传统在线订阅转换服务往往无法沉淀个性化配置，也会把订阅内容暴露给第三方服务。该项目的核心目标是：在自有环境中保存配置、按配置生成安全订阅地址，并在刷新失败时保留最近一次可用结果。
 
 ---
 
 ## 🌟 核心特性
 
-- 🔒 **防泄漏 Token 鉴权**  
-  订阅地址集成安全 Token 鉴权（包含生成账户、时间戳及强随机盐）。采用**唯一有效性机制**：每次生成新订阅链接时，旧 Token 立即永久作废，保障订阅绝对安全。
-- ⚡ **无损动态合成 (AST 解析)**  
-  当客户端请求订阅链接时，后端会**实时从上游刷新拉取最新节点**，随后与您保存在本地数据库中的“自定义节点”、“个性化策略组”及“自定义分流规则”进行无损动态融合，输出最终的 YAML 配置文件。
-- 🛡️ **上游故障热备 (断连容灾)**  
-  如果上游原始订阅服务器因网络波动暂时无法连接，系统将**自动退避使用最近一次成功解析的历史缓存**进行合成直出，确保您的代理软件始终能拉取配置，绝不断网。
-- 🎨 **高颜值控制面板**  
-  使用 **Vue 3 + Vite + Element Plus** 构建的现代化仪表盘。支持节点展示、代理和分流规则的可视化管理，集成订阅地址复制与高危 Token 重新生成确认流程。
+- 🔒 **配置级 Token 鉴权**
+  每个订阅配置拥有独立 Token。重新生成 Token 后，旧地址立即失效；复制订阅地址只读取当前有效 Token，不会误覆盖旧地址。
+
+- 🧩 **结构化 YAML 合并与本地接管**
+  后端使用 `yaml.v3` 节点树处理 Clash/Mihomo YAML，将自定义节点、策略组、规则、排序和隐藏状态重新应用到订阅结果中。订阅资源可以在后台一键接管为本地资源，后续按当前配置独立维护。
+
+- 🔄 **远程刷新与缓存兜底**
+  远程订阅配置在刷新或客户端拉取订阅时会尝试重新请求上游并更新缓存；如果上游暂时不可用，系统会在已有缓存存在时输出最近一次成功生成的配置。本地手动配置不请求上游，而是直接根据手动维护的节点、策略组和规则生成 YAML。
+
+- 🗂️ **多配置隔离管理**
+  支持创建多套远程订阅或本地手动配置。每套配置的节点、策略组、规则、资源排序、隐藏记录和订阅 Token 独立生效，可按场景维护不同客户端或不同线路策略。
+
+- 📲 **多客户端订阅输出**
+  同一个配置可输出 Clash/Mihomo YAML、Surge 最新版配置、Surge 5.7.6 兼容配置、Shadowrocket 配置，并提供 Shadowrocket 安装入口。
+
+- 🎛️ **可视化控制台**
+  前端基于 Vue 3、Vite、Element Plus 与 CodeMirror 构建，支持订阅解析预览、节点链接解析、资源拖拽排序、批量规则保存/删除、跨配置复制代理组与规则、远程规则本地化、数据备份与导入。
 
 ---
 
 ## 🏗️ 架构与工作流
 
-本系统由前端管理后台与高并发 Go 后端组成，两部分通过 RESTful API 进行无缝通讯。
-
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Client as Clash 客户端
-    participant Server as Go 后端服务
-    participant DB as SQLite 数据库
-    participant Upper as 订阅上游服务
+    actor Client as 代理客户端
+    participant Server as Go 后端
+    participant DB as PostgreSQL
+    participant Upper as 远程订阅上游
 
-    Client->>Server: GET /sub?token=xxx (发起订阅更新)
-    rect rgb(240, 248, 255)
-        note over Server, DB: 安全拦截与校验
-        Server->>DB: 验证 Token 并在数据库中匹配有效用户
-        alt Token 校验失败
-            Server-->>Client: 401 Unauthorized (拒绝访问)
-        end
-    end
-    
-    rect rgb(245, 255, 250)
-        note over Server, Upper: 上游实时拉取与容灾
-        Server->>Upper: 发起 HTTP 请求拉取最新订阅
-        alt 拉取成功
-            Upper-->>Server: 返回最新 Base64/YAML 节点
-            Server->>DB: 缓存最新解析后的原始数据
-        else 网络超时 / 节点异常
-            Server->>DB: 读取最近一次成功缓存的数据 (热备)
-        end
+    Client->>Server: GET /sub?token=xxx 或 /surge.conf?token=xxx
+    Server->>DB: 校验配置 Token 并读取对应配置
+    alt Token 无效或过期
+        Server-->>Client: 401 Unauthorized
     end
 
-    rect rgb(255, 250, 240)
-        note over Server, DB: 配置无损合并 (AST)
-        Server->>DB: 读取用户的自定义节点、策略组和过滤规则
-        Server->>Server: 将自定义配置动态注入到订阅节点列表中
-        Server->>Server: 合成并输出最终的 Clash YAML 字符串
+    alt 远程订阅配置
+        Server->>Upper: 请求远程订阅内容
+        alt 刷新成功
+            Server->>Server: 解码 Base64/YAML/节点 URI
+            Server->>DB: 保存原始响应与生成后的 YAML 缓存
+        else 刷新失败且存在历史缓存
+            Server->>DB: 读取最近一次成功生成的 YAML 缓存
+        else 刷新失败且无缓存
+            Server-->>Client: 502 Bad Gateway
+        end
+    else 本地手动配置
+        Server->>DB: 读取本地节点、策略组与规则
+        Server->>Server: 生成 Clash/Mihomo YAML
+        Server->>DB: 保存生成结果
     end
-    
-    Server-->>Client: 200 OK (直出 YAML 配置，Content-Type: text/yaml)
+
+    Server->>DB: 应用自定义节点、策略组、规则、排序与隐藏记录
+    alt Shadowrocket / Surge 输出
+        Server->>Server: 将最终 Clash YAML 转换为目标 .conf
+        Server-->>Client: 200 OK text/plain
+    else Clash / Mihomo 输出
+        Server-->>Client: 200 OK text/yaml
+    end
 ```
 
 ---
 
 ## 🛠️ 技术栈
 
-- **前端 (Frontend)**:
-  - 核心框架: Vue 3 (Composition API)
-  - 构建工具: Vite
-  - 语言: TypeScript
-  - 状态管理: Pinia
-  - UI 库: Element Plus
-  - 网络请求: Axios
+- **前端**
+  - Vue 3 + TypeScript
+  - Vite
+  - Element Plus
+  - Axios
+  - CodeMirror YAML 编辑器
+  - js-yaml
 
-- **后端 (Backend)**:
-  - 开发语言: Go 1.20+
-  - Web 框架: Gin
-  - 数据库 ORM: GORM (SQLite 3 驱动)
-  - 热重载工具: Air
+- **后端**
+  - Go 1.26+
+  - Gin
+  - GORM
+  - PostgreSQL
+  - `gopkg.in/yaml.v3`
+  - base64Captcha
 
 ---
 
 ## 🚀 快速上手
 
-### 1. 克隆项目与环境准备
-确保您的本地已安装 [Node.js (16+)](https://nodejs.org/) 和 [Go (1.20+)](https://go.dev/) 环境。
+### 1. 环境准备
+
+请先准备：
+
+- [Go 1.26+](https://go.dev/)
+- [Node.js 20+](https://nodejs.org/)
+- PostgreSQL 数据库
+- `pnpm` 或 `npm`
 
 ```bash
 git clone https://github.com/mangobubu/clash_proxy.git
 cd clash_proxy
 ```
 
-### 2. 后端服务部署
-后端数据库使用 SQLite 3，无需安装独立的数据库软件，启动时会自动在 `backend` 目录下创建 `gorm.db`。
+### 2. 后端配置与运行
+
+后端读取当前运行目录下的 `config.toml`。开发环境通常在 `backend` 目录内运行，因此先复制配置模板并填写 PostgreSQL 连接信息：
 
 ```bash
 cd backend
-# 下载依赖
+cp config.example.toml config.toml
+```
+
+重点配置项：
+
+```toml
+[server]
+port = 8080
+
+[database]
+host = "127.0.0.1"
+user = "your_username"
+password = "your_password"
+dbname = "clash_proxy"
+port = 5432
+sslmode = "disable"
+timezone = "Asia/Shanghai"
+
+[auth]
+captcha_enabled = true
+```
+
+启动开发后端：
+
+```bash
 go mod tidy
-
-# 方式 A：开发环境下使用 Air 实时重载运行
-# （需先全局安装 air: go install github.com/air-verse/air@latest）
-air
-
-# 方式 B：直接用 Go 编译或运行
 go run main.go
 ```
-后端服务默认监听端口：`http://localhost:8080`
 
-### 3. 前端服务部署
+后端默认监听 `http://localhost:8080`。
+
+### 3. 前端开发环境
+
 ```bash
 cd ../frontend
-
-# 安装 pnpm (如已安装可跳过)
-npm install -g pnpm
-
-# 安装依赖
 pnpm install
-
-# 运行前端开发服务器
 pnpm dev
 ```
-前端服务默认运行于：`http://localhost:5173`。前端已配置了 Vite 反向代理，会自动将 `/api` 的请求转发至后端的 `http://localhost:8080/api`。
 
-### 4. 生产环境构建与一键部署
+如果未安装 `pnpm`，也可以使用 `npm install` 与 `npm run dev`。前端开发服务默认运行在 `http://localhost:5173`，并通过 Vite 代理访问后端 `/api`。
 
-本系统支持**一站式全栈一键打包部署**。为了给您提供最极致、极简的运维体验，项目内置了一个纯 Go 编写的跨平台自动化构建系统。构建完成后，所有的运行资产（含完全嵌入前端的独立二进制文件与初始配置文件）都会被自动汇聚到根目录下的 **`release`** 统一产物目录中。
+---
 
-#### 步骤一：一键全栈构建
-您无需单独管理前端和后端的编译，也无需手动拷贝任何配置文件。只需在项目**根目录**下运行以下一行命令：
+## 📦 生产构建
+
+项目根目录提供 Go 编写的一键构建脚本：
+
 ```bash
 go run build.go
 ```
-构建系统会全自动检测您的本地包管理器（优先使用 `pnpm`，若无则自动降级回退至 `npm`），自动拉取前端依赖、进行前端生产打包，并将后端编译与所有资产汇聚至 `release` 中。
 
-#### 步骤二：运行全栈服务
-构建成功后，您仅需将项目根目录下的 **`release`** 目录整体拷走即可部署。它的结构如下：
+构建脚本会自动完成：
+
+- 探测并使用 `pnpm`，未找到时回退到 `npm`
+- 安装前端依赖
+- 执行前端生产构建
+- 编译后端二进制
+- 将运行产物汇聚到根目录 `release` 目录
+- 首次构建时从 `backend/config.example.toml` 生成 `release/config.toml`，再次构建不会覆盖已有配置
+
+产物结构：
+
 ```text
 release/
-├── ClashSubAST         # 内置了全量前端的独立全栈二进制程序 (Windows 下为 ClashSubAST.exe)
-├── config.toml         # 自动生成的初始运行配置文件 (自动保护，二次构建不会覆盖您的修改)
-└── config.example.toml # 配置模板备份
+├── ClashSubAST         # Windows 下为 ClashSubAST.exe
+└── config.toml         # 运行配置文件
 ```
-进入该目录并直接启动程序即可拉起完整服务：
-```bash
-cd release
-# 运行全栈服务 (Windows 环境下文件名为 ./ClashSubAST.exe)
-./ClashSubAST
-```
-运行后，访问 `http://localhost:8080` 即可直接开始使用完整的前端管理界面与后端 API 服务，真正实现“拷走即用”！
+
+运行时进入 `release` 目录启动二进制即可。请确保 `config.toml` 中的 PostgreSQL 连接信息正确。
 
 ---
 
 ## 📖 使用指南
 
-1. **注册与登录**  
-   首次使用时，在登录页面输入用户名和密码即可自动完成注册并登录。
-2. **导入原始订阅**  
-   在后台中配置您的上游订阅地址，系统将自动对其进行拉取和解码，并展示其中的节点列表。
-3. **定制个性化配置**  
-   - 可在界面中添加专属的**自定义节点**。
-   - 配置您喜好的**分流规则**（如：直连、全局代理、中国IP直连、广告拦截等）。
-4. **管理安全订阅**
-   - 首次使用或需要撤销旧链接时，点击 **[重新生成订阅]**，确认后生成新的专属 `token` 订阅地址（例如 `http://localhost:8080/sub?token=xxx`）。
-   - 日常使用点击 **[复制订阅地址]** 即可复制当前有效订阅地址，该操作只读取现有 Token，不会覆盖旧订阅。
-   - 将复制的地址粘贴到您的代理客户端（如 Clash Verge, Mihomo Party, Clash for Windows 等）中即可。
-   - **注意**：每次确认“重新生成订阅”都会覆盖旧 Token，旧链接会当即失效，防止订阅链接泄露后的不可控风险。
+1. **初始化管理员**
+   首次访问控制台时，系统会进入初始化模式。创建管理员账号后，再使用该账号登录。验证码可通过 `config.toml` 的 `[auth]` 配置开启或关闭。
+
+2. **创建配置**
+   可以创建两类配置：
+   - **远程订阅**：填写上游订阅地址，刷新时后端会请求、解码并生成最终 Clash/Mihomo YAML。
+   - **本地手动**：不依赖上游地址，直接在后台维护节点、策略组和规则。
+
+3. **维护节点、策略组与规则**
+   支持新增自定义节点、解析代理链接、编辑策略组、维护分流规则、批量保存规则、批量删除规则，以及把订阅中的节点或策略组接管为本地资源。
+
+4. **排序与隐藏订阅资源**
+   节点和策略组支持拖拽排序。订阅资源被删除时会记录为隐藏项，刷新订阅后不会自动恢复；接管后的资源则按本地自定义资源管理。
+
+5. **跨配置复用**
+   可以从其他配置复制代理组或规则，也可以把远程订阅中的规则本地化，便于在当前配置中继续精细维护。
+
+6. **生成订阅地址**
+   每个配置可重新生成独立 Token。弹窗中会提供：
+   - Clash / Mihomo YAML：`/sub?token=xxx`
+   - Surge 最新版：`/surge.conf?token=xxx`
+   - Surge 5.7.6：`/surge-5.7.6.conf?token=xxx`
+   - Shadowrocket 配置：`/shadowrocket.conf?token=xxx`
+   - Shadowrocket 安装入口：`/shadowrocket/install?token=xxx`
+
+7. **备份与导入**
+   控制台支持导出当前数据备份，也支持导入备份 JSON。导入失败时后端会回滚数据库事务。
 
 ---
 
-## 🐳 Docker & Docker Compose 极速部署指南
+## 🐳 Docker Compose 部署
 
-如果您希望在生产环境中利用 Docker 进行轻量化一键部署与管理，项目已内置了高水准的容器化支持：
-- **多阶段构建 Dockerfile**：编译环境与生产运行环境物理隔离，最终生成的生产镜像仅约为 50MB。
-- **云原生一键容器编排**：内置了隔离的自定义 Docker 网络组，且全量支持通过环境变量配置外部数据库与连接参数，零挂载实现秒速启动。
+当前 `docker-compose.yml` 面向已有 PostgreSQL 与已有外部 Docker 网络的生产环境。使用前请按自己的环境修改：
 
-### 1. 快速一键拉起
-在安装了 Docker 及 Docker Compose 的服务器上，直接配置好 `docker-compose.yml` 中的环境变量后，仅需运行以下一行命令即可拉起服务：
+- `DB_HOST`
+- `DB_USER`
+- `DB_PASSWORD`
+- `DB_NAME`
+- `DB_PORT`
+- `DB_SSLMODE`
+- `DB_TIMEZONE`
+- `SERVER_PORT`
+- `networks.1panel-network.external`
+
+启动命令：
 
 ```bash
-# 一键在后台启动 ClashSubAST 独立服务 (自动与隔离的网络组及外部 PostgreSQL 数据库建立连接)
 docker compose up -d
 ```
 
-### 2. 容器服务生命周期管理
+常用管理命令：
+
 ```bash
-# 查看所有容器服务的运行状态、端口以及健康度 (自动进行数据库就绪检测)
 docker compose ps
-
-# 实时追踪并查看容器的运行日志输出
 docker compose logs -f
-
-# 优雅停止并销毁容器集群 (数据已通过数据卷持久化保存，数据绝对安全)
 docker compose down
-```
-
-### 3. 数据备份与配置文件维护
-* **配置文件更新**：您可以直接在宿主机修改根目录下的 `config.toml` 文件，修改后运行 `docker compose restart app` 重启应用容器即可使最新配置生效。
-* **数据库持久化**：数据库的数据会被安全地保存在 Docker Named Volume `clash-sub-ast-pgdata` 中，即使容器群被完全删除重建，您的数据依然完好无损。
-
-### 4. 容器热更新与滚动重启
-当项目代码库有最新提交或您在本地做出了配置修改时，直接在服务器项目根目录下执行以下命令，Docker Compose 就会全自动在后台编译新镜像并滚动更新替换旧容器（仅需 1-2 秒，实现零停机感）：
-
-```bash
-# 一键编译新镜像并后台滚动更新应用容器
 docker compose up -d --build
-
-# (建议) 运行下方命令清理重构时产生的虚悬无用镜像，释放服务器磁盘空间
-docker image prune -f
 ```
+
+注意：Compose 文件当前不会自动创建 PostgreSQL 容器，也不会自动创建外部网络。请先确保数据库和外部网络已可用，或按自己的部署环境调整 Compose 配置。
 
 ---
 
