@@ -75,7 +75,12 @@ const handleClick = (event: MouseEvent) => {
 
 <style scoped>
 .icon-tooltip-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px;
   flex: 0 0 auto;
+  line-height: 1 !important;
 }
 
 .icon-tooltip-button:not(.is-link):not(.is-text) {
@@ -83,14 +88,57 @@ const handleClick = (event: MouseEvent) => {
   min-height: 40px;
 }
 
+.icon-tooltip-button.is-circle {
+  width: 40px;
+  height: 40px;
+  padding: 0 !important;
+}
+
+.icon-tooltip-button :deep(.el-icon) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.icon-tooltip-button :deep(.el-icon svg) {
+  display: block;
+  width: 20px;
+  height: 20px;
+  overflow: visible;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 28;
+  paint-order: stroke fill;
+}
+
 .icon-tooltip-button__label {
-  margin-left: 6px;
+  margin-left: 0;
+  line-height: 1;
 }
 
 @media (max-width: 640px) {
   .icon-tooltip-button:not(.is-link):not(.is-text) {
     min-width: 42px;
     min-height: 42px;
+  }
+
+  .icon-tooltip-button.is-circle {
+    width: 42px;
+    height: 42px;
+  }
+
+  .icon-tooltip-button :deep(.el-icon),
+  .icon-tooltip-button :deep(.el-icon svg) {
+    width: 21px;
+    height: 21px;
+    font-size: 21px;
   }
 }
 </style>
