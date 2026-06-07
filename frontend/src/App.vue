@@ -3606,7 +3606,6 @@ const submitChangePassword = async () => {
           class="sub-link-close-button"
           @click="subLinkDialogVisible = false"
           type="primary"
-          plain
         >
           关闭
         </el-button>
@@ -5080,21 +5079,30 @@ const submitChangePassword = async () => {
 }
 
 .sub-link-dialog-shell :deep(.sub-link-close-button) {
-  border-color: rgba(56, 189, 248, 0.42) !important;
-  background: rgba(14, 165, 233, 0.14) !important;
-  color: #e0f2fe !important;
+  --el-button-text-color: #ffffff;
+  --el-button-bg-color: #0ea5e9;
+  --el-button-border-color: #0ea5e9;
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: #0284c7;
+  --el-button-hover-border-color: #0284c7;
+  --el-button-active-text-color: #ffffff;
+  --el-button-active-bg-color: #0369a1;
+  --el-button-active-border-color: #0369a1;
+  border-color: #0ea5e9 !important;
+  background: #0ea5e9 !important;
+  color: #ffffff !important;
 }
 
 .sub-link-dialog-shell :deep(.sub-link-close-button:hover),
 .sub-link-dialog-shell :deep(.sub-link-close-button:focus) {
-  border-color: rgba(56, 189, 248, 0.72) !important;
-  background: rgba(14, 165, 233, 0.28) !important;
+  border-color: #0284c7 !important;
+  background: #0284c7 !important;
   color: #ffffff !important;
 }
 
 .sub-link-dialog-shell :deep(.sub-link-close-button:active) {
-  border-color: rgba(2, 132, 199, 0.78) !important;
-  background: rgba(2, 132, 199, 0.32) !important;
+  border-color: #0369a1 !important;
+  background: #0369a1 !important;
   color: #ffffff !important;
 }
 
