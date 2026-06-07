@@ -55,12 +55,15 @@ type Config struct {
 		TimeZone string `toml:"timezone"`
 	} `toml:"database"`
 	Auth struct {
-		CaptchaEnabled   bool   `toml:"captcha_enabled"`
-		CaptchaLength    int    `toml:"captcha_length"`
-		CaptchaWidth     int    `toml:"captcha_width"`
-		CaptchaHeight    int    `toml:"captcha_height"`
-		CaptchaBgColor   string `toml:"captcha_bg_color"`
-		CaptchaTextColor string `toml:"captcha_text_color"`
+		CaptchaEnabled    bool   `toml:"captcha_enabled"`
+		CaptchaLength     int    `toml:"captcha_length"`
+		CaptchaWidth      int    `toml:"captcha_width"`
+		CaptchaHeight     int    `toml:"captcha_height"`
+		CaptchaBgColor    string `toml:"captcha_bg_color"`
+		CaptchaTextColor  string `toml:"captcha_text_color"`
+		CaptchaSource     string `toml:"captcha_source"`
+		CaptchaNoiseCount int    `toml:"captcha_noise_count"`
+		CaptchaNoiseColor string `toml:"captcha_noise_color"`
 	} `toml:"auth"`
 }
 
@@ -154,6 +157,7 @@ func initDB() {
 		if err != nil {
 			log.Fatalf("Failed to unmarshal config.toml: %v", err)
 		}
+		applyCaptchaConfigDefaults(&cfg, configData)
 	} else {
 		log.Println("config.toml not found, relying on environment variables or default values.")
 		cfg.Server.Port = defaultServerPort
@@ -165,11 +169,14 @@ func initDB() {
 
 		// 验证码默认退避参数，防止图片拉起产生零值异常
 		cfg.Auth.CaptchaEnabled = true
-		cfg.Auth.CaptchaLength = 5
-		cfg.Auth.CaptchaWidth = 160
-		cfg.Auth.CaptchaHeight = 60
-		cfg.Auth.CaptchaBgColor = "rgba(15, 23, 42, 0.6)"
-		cfg.Auth.CaptchaTextColor = "#FFFFFF"
+		cfg.Auth.CaptchaLength = defaultCaptchaLength
+		cfg.Auth.CaptchaWidth = defaultCaptchaWidth
+		cfg.Auth.CaptchaHeight = defaultCaptchaHeight
+		cfg.Auth.CaptchaBgColor = defaultCaptchaBgColor
+		cfg.Auth.CaptchaTextColor = defaultCaptchaTextColor
+		cfg.Auth.CaptchaSource = defaultCaptchaSource
+		cfg.Auth.CaptchaNoiseCount = defaultCaptchaNoiseCount
+		cfg.Auth.CaptchaNoiseColor = defaultCaptchaNoiseColor
 	}
 
 	if cfg.Server.Port <= 0 {
@@ -255,6 +262,58 @@ func initDB() {
 
 	DB = db
 	log.Println("Database initialized successfully.")
+}
+
+func applyCaptchaConfigDefaults(cfg *Config, configData []byte) {
+	if cfg.Auth.CaptchaLength <= 0 {
+		cfg.Auth.CaptchaLength = defaultCaptchaLength
+	}
+	if cfg.Auth.CaptchaWidth <= 0 {
+		cfg.Auth.CaptchaWidth = defaultCaptchaWidth
+	}
+	if cfg.Auth.CaptchaHeight <= 0 {
+		cfg.Auth.CaptchaHeight = defaultCaptchaHeight
+	}
+	if strings.TrimSpace(cfg.Auth.CaptchaBgColor) == "" {
+		cfg.Auth.CaptchaBgColor = defaultCaptchaBgColor
+	}
+	if strings.TrimSpace(cfg.Auth.CaptchaTextColor) == "" {
+		cfg.Auth.CaptchaTextColor = defaultCaptchaTextColor
+	}
+	if strings.TrimSpace(cfg.Auth.CaptchaSource) == "" {
+		cfg.Auth.CaptchaSource = defaultCaptchaSource
+	}
+	if !authConfigHasKey(configData, "captcha_noise_count") {
+		cfg.Auth.CaptchaNoiseCount = defaultCaptchaNoiseCount
+	}
+	if cfg.Auth.CaptchaNoiseCount < 0 {
+		cfg.Auth.CaptchaNoiseCount = 0
+	}
+	if strings.TrimSpace(cfg.Auth.CaptchaNoiseColor) == "" {
+		cfg.Auth.CaptchaNoiseColor = defaultCaptchaNoiseColor
+	}
+}
+
+func authConfigHasKey(configData []byte, key string) bool {
+	inAuthSection := false
+	for _, rawLine := range strings.Split(string(configData), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(line, "#") || line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			inAuthSection = strings.HasPrefix(line, "[auth]")
+			continue
+		}
+		if !inAuthSection || !strings.HasPrefix(line, key) {
+			continue
+		}
+		remainder := strings.TrimSpace(strings.TrimPrefix(line, key))
+		if strings.HasPrefix(remainder, "=") {
+			return true
+		}
+	}
+	return false
 }
 
 func dropLegacyGlobalUniqueIndexes(db *gorm.DB) {

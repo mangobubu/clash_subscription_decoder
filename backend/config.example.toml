@@ -22,5 +22,11 @@ captcha_width = 160
 captcha_height = 60
 # 验证码背景颜色 (支持十六进制如 #1e293b 或 rgba，建议和前端登录框底色搭配)
 captcha_bg_color = "rgba(15, 23, 42, 0.6)"
-# 验证码文字颜色 (支持十六进制如 #FFFFFF，将通过前端动态渲染映射)
+# Captcha text color. Supports #RRGGBB, #RRGGBBAA and rgba(r,g,b,a); rendered into the PNG by the backend.
 captcha_text_color = "#FFFFFF"
+# Captcha candidate characters. The server randomly picks captcha_length characters from this pool.
+captcha_source = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz"
+# Captcha noise dot count. Set to 0 to disable noise dots.
+captcha_noise_count = 18
+# Captcha noise dot color. Supports #RRGGBB, #RRGGBBAA and rgba(r,g,b,a).
+captcha_noise_color = "rgba(148, 163, 184, 0.45)"

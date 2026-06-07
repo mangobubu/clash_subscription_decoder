@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
-	"image/color"
 	"io"
 	"io/fs"
 	"log"
@@ -234,30 +233,6 @@ func AuthMiddleware() gin.HandlerFunc {
 	}
 }
 
-func parseColor(s string) *color.RGBA {
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "rgba") {
-		s = strings.ReplaceAll(s, " ", "")
-		var r, g, b uint8
-		var a float32
-		fmt.Sscanf(s, "rgba(%d,%d,%d,%f)", &r, &g, &b, &a)
-		return &color.RGBA{R: r, G: g, B: b, A: uint8(a * 255)}
-	} else if strings.HasPrefix(s, "#") {
-		s = strings.TrimPrefix(s, "#")
-		if len(s) == 6 {
-			var r, g, b uint8
-			fmt.Sscanf(s, "%02x%02x%02x", &r, &g, &b)
-			return &color.RGBA{R: r, G: g, B: b, A: 255}
-		}
-		if len(s) == 8 {
-			var r, g, b, a uint8
-			fmt.Sscanf(s, "%02x%02x%02x%02x", &r, &g, &b, &a)
-			return &color.RGBA{R: r, G: g, B: b, A: a}
-		}
-	}
-	return &color.RGBA{0, 0, 0, 0}
-}
-
 func handleVerify(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Token valid"})
 }
@@ -329,14 +304,7 @@ func handleCaptcha(c *gin.Context) {
 		return
 	}
 
-	driver := &base64Captcha.DriverMath{
-		Height:          AppConfig.Auth.CaptchaHeight,
-		Width:           AppConfig.Auth.CaptchaWidth,
-		NoiseCount:      0,
-		ShowLineOptions: 0,
-		BgColor:         parseColor(AppConfig.Auth.CaptchaBgColor),
-	}
-	cp := base64Captcha.NewCaptcha(driver, captchaStore)
+	cp := base64Captcha.NewCaptcha(newConfiguredCaptchaDriver(), captchaStore)
 	id, b64s, _, err := cp.Generate()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成验证码失败"})

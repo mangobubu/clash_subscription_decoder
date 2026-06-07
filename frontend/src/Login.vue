@@ -37,7 +37,7 @@
               class="captcha-input"
             />
             <div class="captcha-img-box" @click="fetchCaptcha" title="点击刷新验证码">
-              <img v-if="captchaImage" :src="captchaImage" alt="验证码" :style="{ filter: textColor !== '#FFFFFF' ? `drop-shadow(0 0 2px ${textColor})` : 'none' }" />
+              <img v-if="captchaImage" :src="captchaImage" alt="验证码" />
               <el-icon v-else class="is-loading"><Loading /></el-icon>
             </div>
           </div>
@@ -79,7 +79,6 @@ const captchaImage = ref('');
 const captchaEnabled = ref(false);
 const isLoading = ref(false);
 const isInitMode = ref(false);
-const textColor = ref('');
 
 const fetchCaptcha = async () => {
   try {
@@ -96,7 +95,6 @@ const fetchCaptcha = async () => {
         captchaEnabled.value = true;
         captchaId.value = res.data.data.captcha_id;
         captchaImage.value = res.data.data.b64s;
-        textColor.value = res.data.data.text_color || '#FFFFFF';
         captchaValue.value = '';
       } else {
         captchaEnabled.value = false;
