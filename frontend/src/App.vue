@@ -1,7 +1,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
 import { ElLoading, ElMessage, ElMessageBox } from "element-plus";
-import { Link, Edit, Delete, Loading, ArrowDown } from "@element-plus/icons-vue";
+import {
+  Link,
+  Edit,
+  Delete,
+  Loading,
+  ArrowDown,
+  Search,
+  Plus,
+  MoreFilled,
+  Select,
+} from "@element-plus/icons-vue";
 import axios from "axios";
 import { Codemirror } from "vue-codemirror";
 import { yaml as codemirrorYaml } from "@codemirror/lang-yaml";
@@ -1411,8 +1421,17 @@ const saveCustomNode = async () => {
 };
 
 const dirtyRulesMap = ref<Record<string, any>>({});
-const hasDirtyRules = computed(() => Object.keys(dirtyRulesMap.value).length > 0);
+const dirtyRuleCount = computed(() => Object.keys(dirtyRulesMap.value).length);
+const hasDirtyRules = computed(() => dirtyRuleCount.value > 0);
 const isDeletingFilteredRules = ref(false);
+const hasFilteredRules = computed(() => parsedRules.value.length > 0);
+const canDeleteFilteredRules = computed(
+  () =>
+    Boolean(ruleTargetFilter.value) &&
+    hasFilteredRules.value &&
+    !hasDirtyRules.value &&
+    !isDeletingFilteredRules.value,
+);
 
 const markRuleDirty = (row: any) => {
   dirtyRulesMap.value[getRuleIdentityKey(row)] = row;
@@ -1767,6 +1786,21 @@ const localizeRemoteRules = async () => {
     ElMessage.error(err.response?.data?.error || err.response?.data?.message || "本地化远程规则失败");
   } finally {
     isLocalizingRules.value = false;
+  }
+};
+
+const handleRuleToolbarCommand = (command: string) => {
+  if (command === "localizeRemoteRules") {
+    void localizeRemoteRules();
+    return;
+  }
+  if (command === "copyRules") {
+    openCopyRulesDialog();
+    return;
+  }
+  if (command === "deleteFilteredRules") {
+    if (!canDeleteFilteredRules.value) return;
+    void deleteFilteredRulesByTarget();
   }
 };
 
@@ -2603,119 +2637,137 @@ const submitChangePassword = async () => {
               </template>
 
               <div class="rules-container glass-card">
-                <div class="rules-toolbar" style="display: flex; flex-wrap: wrap; align-items: center; gap: 15px;">
-                  <el-select
-                    v-model="ruleTargetFilter"
-                    placeholder="目标策略过滤"
-                    clearable
-                    filterable
-                    style="width: 220px;"
-                    popper-class="glass-dropdown"
-                  >
-                    <el-option label="[全部策略]" value="" />
-                    <el-option v-for="t in ruleTargets" :key="t" :label="t" :value="t" />
-                  </el-select>
-                  <el-button
-                    type="danger"
-                    plain
-                    round
-                    :disabled="!ruleTargetFilter || parsedRules.length === 0 || hasDirtyRules"
-                    :loading="isDeletingFilteredRules"
-                    @click="deleteFilteredRulesByTarget"
-                  >
-                    一键删除选择的目标策略
-                  </el-button>
-                  <el-select
-                    v-model="bulkRuleTarget"
-                    placeholder="批量设置为目标策略"
-                    clearable
-                    filterable
-                    allow-create
-                    default-first-option
-                    style="width: 240px;"
-                    popper-class="glass-dropdown"
-                  >
-                    <el-option
-                      v-for="option in builtInRuleTargetOptions"
-                      :key="option.value"
-                      :label="option.label"
-                      :value="option.value"
-                    />
-                    <el-option-group label="现有策略组">
-                      <el-option
-                        v-for="g in proxyGroups"
-                        :key="g.name"
-                        :label="g.name"
-                        :value="g.name"
-                      />
-                    </el-option-group>
-                    <el-option-group label="现有独立节点">
-                      <el-option
-                        v-for="n in parsedNodes"
-                        :key="n.name"
-                        :label="n.name"
-                        :value="n.name"
-                      />
-                    </el-option-group>
-                  </el-select>
-                  <el-button
-                    type="primary"
-                    plain
-                    round
-                    :disabled="!bulkRuleTarget || parsedRules.length === 0"
-                    @click="applyBulkRuleTargetToFilteredRules"
-                  >
-                    一键设置筛选结果
-                  </el-button>
-                  <el-input
-                    v-model="ruleSearchQuery"
-                    placeholder="输入关键字进一步检索规则类型或内容..."
-                    clearable
-                    class="rule-search-input"
-                    style="flex: 1;"
-                  >
-                    <template #prefix>
-                      <span style="font-size: 16px">🔍</span>
-                    </template>
-                  </el-input>
-                  <el-button
-                    v-if="hasDirtyRules"
-                    type="success"
-                    effect="dark"
-                    round
-                    :loading="isSubmittingRule"
-                    @click="batchSaveRules"
-                  >
-                    💾 批量应用修改 ({{ Object.keys(dirtyRulesMap).length }})
-                  </el-button>
-                  <el-button
-                    type="primary"
-                    effect="dark"
-                    round
-                    @click="openRuleDialog"
-                  >
-                    <span style="margin-right: 4px; font-weight: bold">+</span>
-                    新增自定义规则
-                  </el-button>
-                  <el-button
-                    v-if="currentProfile?.source_type === 'remote'"
-                    type="success"
-                    plain
-                    round
-                    :loading="isLocalizingRules"
-                    @click="localizeRemoteRules"
-                  >
-                    本地化远程规则
-                  </el-button>
-                  <el-button
-                    type="warning"
-                    plain
-                    round
-                    :disabled="copyRuleSourceOptions.length === 0"
-                    @click="openCopyRulesDialog"
-                  >
-                    从其他配置复制规则
-                  </el-button>
+                <div class="rules-toolbar">
+                  <div class="rules-toolbar-main">
+                    <div class="rules-filter-group">
+                      <el-select
+                        v-model="ruleTargetFilter"
+                        placeholder="目标策略过滤"
+                        clearable
+                        filterable
+                        class="rule-target-filter"
+                        popper-class="glass-dropdown"
+                      >
+                        <el-option label="[全部策略]" value="" />
+                        <el-option v-for="t in ruleTargets" :key="t" :label="t" :value="t" />
+                      </el-select>
+                      <el-input
+                        v-model="ruleSearchQuery"
+                        placeholder="搜索规则类型、内容或目标策略"
+                        clearable
+                        class="rule-search-input"
+                      >
+                        <template #prefix>
+                          <el-icon><Search /></el-icon>
+                        </template>
+                      </el-input>
+                    </div>
+
+                    <div class="rules-primary-actions">
+                      <el-button
+                        v-if="hasDirtyRules"
+                        type="success"
+                        round
+                        :icon="Select"
+                        :loading="isSubmittingRule"
+                        @click="batchSaveRules"
+                      >
+                        应用修改 ({{ dirtyRuleCount }})
+                      </el-button>
+                      <el-button
+                        type="primary"
+                        round
+                        :icon="Plus"
+                        @click="openRuleDialog"
+                      >
+                        新增规则
+                      </el-button>
+                      <el-dropdown trigger="click" @command="handleRuleToolbarCommand">
+                        <el-button class="rules-more-button" round :icon="MoreFilled">
+                          更多操作
+                          <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                        </el-button>
+                        <template #dropdown>
+                          <el-dropdown-menu>
+                            <el-dropdown-item
+                              v-if="currentProfile?.source_type === 'remote'"
+                              command="localizeRemoteRules"
+                              :disabled="isLocalizingRules"
+                            >
+                              {{ isLocalizingRules ? "正在本地化远程规则" : "本地化远程规则" }}
+                            </el-dropdown-item>
+                            <el-dropdown-item
+                              command="copyRules"
+                              :disabled="copyRuleSourceOptions.length === 0 || isCopyingRules"
+                            >
+                              从其他配置复制规则
+                            </el-dropdown-item>
+                            <el-dropdown-item
+                              divided
+                              command="deleteFilteredRules"
+                              :disabled="!canDeleteFilteredRules"
+                              class="rules-danger-dropdown-item"
+                            >
+                              {{ isDeletingFilteredRules ? "正在删除筛选规则" : "删除当前目标策略规则" }}
+                            </el-dropdown-item>
+                          </el-dropdown-menu>
+                        </template>
+                      </el-dropdown>
+                    </div>
+                  </div>
+
+                  <div class="rules-batch-panel">
+                    <div class="rules-batch-copy">
+                      <span class="rules-batch-title">批量调整</span>
+                      <span class="rules-batch-desc">
+                        作用于当前筛选出的 {{ parsedRules.length }} 条规则
+                      </span>
+                    </div>
+                    <div class="rules-batch-controls">
+                      <el-select
+                        v-model="bulkRuleTarget"
+                        placeholder="批量设置为目标策略"
+                        clearable
+                        filterable
+                        allow-create
+                        default-first-option
+                        class="rule-bulk-target-select"
+                        popper-class="glass-dropdown"
+                      >
+                        <el-option
+                          v-for="option in builtInRuleTargetOptions"
+                          :key="option.value"
+                          :label="option.label"
+                          :value="option.value"
+                        />
+                        <el-option-group label="现有策略组">
+                          <el-option
+                            v-for="g in proxyGroups"
+                            :key="g.name"
+                            :label="g.name"
+                            :value="g.name"
+                          />
+                        </el-option-group>
+                        <el-option-group label="现有独立节点">
+                          <el-option
+                            v-for="n in parsedNodes"
+                            :key="n.name"
+                            :label="n.name"
+                            :value="n.name"
+                          />
+                        </el-option-group>
+                      </el-select>
+                      <el-button
+                        type="primary"
+                        plain
+                        round
+                        :disabled="!bulkRuleTarget || !hasFilteredRules"
+                        @click="applyBulkRuleTargetToFilteredRules"
+                      >
+                        设置筛选结果
+                      </el-button>
+                    </div>
+                  </div>
                 </div>
 
                 <el-table
@@ -4163,12 +4215,161 @@ const submitChangePassword = async () => {
 }
 
 .rules-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   margin-bottom: 20px;
 }
 
+.rules-toolbar-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.rules-filter-group {
+  display: flex;
+  align-items: center;
+  flex: 1 1 560px;
+  min-width: 0;
+  gap: 10px;
+}
+
+.rule-target-filter {
+  flex: 0 0 220px;
+}
+
 .rule-search-input {
-  max-width: 400px;
+  flex: 1 1 320px;
+  min-width: 260px;
   --el-input-bg-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+.rules-primary-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rules-primary-actions :deep(.el-button + .el-button),
+.rules-batch-controls :deep(.el-button + .el-button) {
+  margin-left: 0 !important;
+}
+
+.rules-more-button {
+  border-color: rgba(148, 163, 184, 0.2) !important;
+  background: rgba(15, 23, 42, 0.36) !important;
+  color: var(--text-secondary) !important;
+}
+
+.rules-more-button:hover,
+.rules-more-button:focus {
+  border-color: rgba(56, 189, 248, 0.36) !important;
+  color: #e0f2fe !important;
+  background: rgba(56, 189, 248, 0.1) !important;
+}
+
+.rules-batch-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.26);
+}
+
+.rules-batch-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  gap: 2px;
+}
+
+.rules-batch-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.rules-batch-desc {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.rules-batch-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rule-bulk-target-select {
+  width: 280px;
+  max-width: 100%;
+}
+
+:deep(.rules-danger-dropdown-item:not(.is-disabled)) {
+  color: #fca5a5 !important;
+}
+
+:deep(.rules-danger-dropdown-item:not(.is-disabled):hover) {
+  background-color: rgba(248, 113, 113, 0.12) !important;
+  color: #fecaca !important;
+}
+
+@media (max-width: 900px) {
+  .rules-toolbar-main,
+  .rules-batch-panel {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .rules-filter-group,
+  .rules-primary-actions,
+  .rules-batch-controls {
+    width: 100%;
+  }
+
+  .rules-primary-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .rules-filter-group,
+  .rules-batch-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .rule-target-filter,
+  .rule-search-input,
+  .rule-bulk-target-select,
+  .rules-primary-actions :deep(.el-button),
+  .rules-primary-actions :deep(.el-dropdown),
+  .rules-primary-actions :deep(.el-dropdown .el-button),
+  .rules-batch-controls :deep(.el-button) {
+    width: 100%;
+  }
+
+  .rule-target-filter,
+  .rule-search-input {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .rules-primary-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
 }
 
 .custom-table {
