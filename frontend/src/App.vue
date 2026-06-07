@@ -3463,118 +3463,142 @@ const submitChangePassword = async () => {
     <el-dialog
       v-model="subLinkDialogVisible"
       :title="subLinkDialogTitle"
-      width="640px"
-      class="glass-dialog"
+      width="720px"
+      class="glass-dialog sub-link-dialog-shell"
     >
-	      <div style="padding: 10px 0;">
-	        <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 14px; line-height: 1.5;">
-	          当前配置：<strong style="color: var(--text-primary);">{{ currentProfileName }}</strong><br/>
-	          请选择要使用的客户端配置地址。Clash/Mihomo 使用默认 YAML 订阅；Surge 最新版与 Surge 5.7.6 使用各自专用 .conf 配置地址；Shadowrocket 请优先点击“安装到 Shadowrocket”创建新配置，失败时再复制配置地址到 iOS 的“配置”里通过 URL 下载，不要作为首页普通服务器订阅导入。
-	          <template v-if="showRegeneratedWarning">
-            <br/><br/>
-            <strong style="color: var(--el-color-danger);">重新生成订阅会覆盖旧 token，旧订阅地址将立即失效。</strong>
-          </template>
-        </p>
-        <div style="display: grid; gap: 14px;">
-          <div>
-            <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">
-              Clash / Mihomo 订阅地址
-            </div>
-            <el-input
-              v-model="finalSubLink"
-              readonly
-              class="copy-input"
-            >
-              <template #append>
-                <IconTooltipButton
-                  label="复制 Clash / Mihomo 订阅地址"
-                  type="primary"
-                  :icon="CopyDocument"
-                  @click="copySubLink"
-                />
-              </template>
-            </el-input>
+      <div class="sub-link-dialog">
+        <div class="sub-link-dialog__intro">
+          <div class="sub-link-dialog__profile">
+            <span>当前配置</span>
+            <strong>{{ currentProfileName }}</strong>
           </div>
-          <div>
-            <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">
-              Surge 最新版配置地址
+          <p>
+            按客户端选择对应地址。Clash / Mihomo 使用默认 YAML 订阅，Surge 使用专用 .conf 配置，
+            Shadowrocket 优先使用安装入口创建新配置。
+          </p>
+        </div>
+
+        <div v-if="showRegeneratedWarning" class="sub-link-warning" role="alert">
+          <strong>旧 token 已失效</strong>
+          <span>重新生成订阅会覆盖旧 token，请及时替换客户端中的旧订阅地址。</span>
+        </div>
+
+        <div class="sub-link-grid">
+          <section class="sub-link-card sub-link-card--primary">
+            <div class="sub-link-card__header">
+              <div>
+                <h3>Clash / Mihomo</h3>
+                <p>默认 YAML 订阅地址，适合 Clash Verge、Mihomo Party 等客户端。</p>
+              </div>
+              <span class="sub-link-card__tag">YAML</span>
             </div>
-            <el-input
-              v-model="surgeLatestSubLink"
-              readonly
-              class="copy-input"
-            >
-              <template #append>
-                <IconTooltipButton
-                  label="复制 Surge 最新版配置地址"
-                  type="warning"
-                  :icon="CopyDocument"
-                  @click="copySurgeLatestSubLink"
-                />
-              </template>
-            </el-input>
-          </div>
-          <div>
-            <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">
-              Surge 5.7.6 兼容配置地址
+            <div class="sub-link-row">
+              <el-input v-model="finalSubLink" readonly class="copy-input" />
+              <IconTooltipButton
+                label="复制 Clash / Mihomo 订阅地址"
+                type="primary"
+                :circle="false"
+                :icon="CopyDocument"
+                @click="copySubLink"
+              >
+                复制
+              </IconTooltipButton>
             </div>
-            <el-input
-              v-model="surge576SubLink"
-              readonly
-              class="copy-input"
-            >
-              <template #append>
-                <IconTooltipButton
-                  label="复制 Surge 5.7.6 兼容配置地址"
-                  type="warning"
-                  :icon="CopyDocument"
-                  @click="copySurge576SubLink"
-                />
-              </template>
-            </el-input>
-          </div>
-          <div>
-            <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">
-              Shadowrocket 配置地址
+          </section>
+
+          <section class="sub-link-card">
+            <div class="sub-link-card__header">
+              <div>
+                <h3>Surge 最新版</h3>
+                <p>新版 Surge 专用配置地址，输出最新兼容格式。</p>
+              </div>
+              <span class="sub-link-card__tag sub-link-card__tag--warning">CONF</span>
             </div>
-            <div class="sub-link-primary-action">
+            <div class="sub-link-row">
+              <el-input v-model="surgeLatestSubLink" readonly class="copy-input" />
+              <IconTooltipButton
+                label="复制 Surge 最新版配置地址"
+                type="warning"
+                :circle="false"
+                :icon="CopyDocument"
+                @click="copySurgeLatestSubLink"
+              >
+                复制
+              </IconTooltipButton>
+            </div>
+          </section>
+
+          <section class="sub-link-card">
+            <div class="sub-link-card__header">
+              <div>
+                <h3>Surge 5.7.6</h3>
+                <p>面向 Surge 5.7.6 的兼容配置地址。</p>
+              </div>
+              <span class="sub-link-card__tag sub-link-card__tag--warning">兼容</span>
+            </div>
+            <div class="sub-link-row">
+              <el-input v-model="surge576SubLink" readonly class="copy-input" />
+              <IconTooltipButton
+                label="复制 Surge 5.7.6 兼容配置地址"
+                type="warning"
+                :circle="false"
+                :icon="CopyDocument"
+                @click="copySurge576SubLink"
+              >
+                复制
+              </IconTooltipButton>
+            </div>
+          </section>
+
+          <section class="sub-link-card sub-link-card--shadowrocket">
+            <div class="sub-link-card__header">
+              <div>
+                <h3>Shadowrocket</h3>
+                <p>优先安装到 Shadowrocket；安装失败时再复制配置地址到 iOS 配置里下载。</p>
+              </div>
               <IconTooltipButton
                 label="安装到 Shadowrocket"
                 type="success"
+                :circle="false"
                 :icon="Link"
                 @click="installShadowrocketConfig"
-              />
+              >
+                安装
+              </IconTooltipButton>
             </div>
-            <el-input
-              v-model="shadowrocketInstallLink"
-              readonly
-              class="copy-input"
-              style="margin-bottom: 10px;"
-            >
-              <template #append>
-                <IconTooltipButton
-                  label="复制 Shadowrocket 安装链接"
-                  type="success"
-                  :icon="CopyDocument"
-                  @click="copyShadowrocketInstallLink"
-                />
-              </template>
-            </el-input>
-            <el-input
-              v-model="shadowrocketSubLink"
-              readonly
-              class="copy-input"
-            >
-              <template #append>
-                <IconTooltipButton
-                  label="复制 Shadowrocket 配置地址"
-                  type="success"
-                  :icon="CopyDocument"
-                  @click="copyShadowrocketSubLink"
-                />
-              </template>
-            </el-input>
-          </div>
+            <div class="sub-link-stack">
+              <div class="sub-link-field">
+                <span>安装链接</span>
+                <div class="sub-link-row">
+                  <el-input v-model="shadowrocketInstallLink" readonly class="copy-input" />
+                  <IconTooltipButton
+                    label="复制 Shadowrocket 安装链接"
+                    type="success"
+                    :circle="false"
+                    :icon="CopyDocument"
+                    @click="copyShadowrocketInstallLink"
+                  >
+                    复制
+                  </IconTooltipButton>
+                </div>
+              </div>
+              <div class="sub-link-field">
+                <span>配置地址</span>
+                <div class="sub-link-row">
+                  <el-input v-model="shadowrocketSubLink" readonly class="copy-input" />
+                  <IconTooltipButton
+                    label="复制 Shadowrocket 配置地址"
+                    type="success"
+                    :circle="false"
+                    :icon="CopyDocument"
+                    @click="copyShadowrocketSubLink"
+                  >
+                    复制
+                  </IconTooltipButton>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
       <template #footer>
@@ -4854,22 +4878,171 @@ const submitChangePassword = async () => {
   background: rgba(56, 189, 248, 0.1) !important;
 }
 
-.copy-input :deep(.el-input-group__append) {
-  padding: 0 !important;
-  overflow: hidden;
+.sub-link-dialog-shell {
+  --dialog-width: 720px;
 }
 
-.copy-input :deep(.el-input-group__append .el-button) {
-  width: 42px;
-  min-width: 42px;
-  height: 100%;
-  border-radius: 0 !important;
-}
-
-.sub-link-primary-action {
+.sub-link-dialog {
   display: flex;
-  justify-content: flex-end;
-  margin-bottom: 10px;
+  flex-direction: column;
+  gap: 14px;
+  padding: 2px 0;
+}
+
+.sub-link-dialog__intro {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(56, 189, 248, 0.16);
+  border-radius: 14px;
+  background: rgba(14, 165, 233, 0.06);
+}
+
+.sub-link-dialog__intro p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.sub-link-dialog__profile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.sub-link-dialog__profile strong {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sub-link-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(239, 68, 68, 0.26);
+  border-radius: 12px;
+  background: rgba(239, 68, 68, 0.08);
+  color: #fecaca;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sub-link-warning strong {
+  flex: 0 0 auto;
+  color: #fca5a5;
+}
+
+.sub-link-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.sub-link-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.46);
+}
+
+.sub-link-card--primary {
+  border-color: rgba(56, 189, 248, 0.22);
+  background: rgba(8, 47, 73, 0.22);
+}
+
+.sub-link-card--shadowrocket {
+  border-color: rgba(16, 185, 129, 0.2);
+}
+
+.sub-link-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sub-link-card__header h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.sub-link-card__header p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.sub-link-card__tag {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.12);
+  color: #7dd3fc;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.sub-link-card__tag--warning {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fcd34d;
+}
+
+.sub-link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.sub-link-row :deep(.el-button) {
+  min-width: 88px;
+  min-height: 40px;
+  padding: 0 14px !important;
+  border-radius: 10px !important;
+}
+
+.copy-input {
+  min-width: 0;
+}
+
+.copy-input :deep(.el-input__wrapper) {
+  min-height: 40px;
+  padding: 4px 12px !important;
+}
+
+.copy-input :deep(.el-input__inner) {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.sub-link-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.sub-link-field {
+  display: grid;
+  gap: 7px;
+}
+
+.sub-link-field > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .mobile-action-bar {
@@ -5033,6 +5206,58 @@ const submitChangePassword = async () => {
   .pagination-wrapper {
     justify-content: flex-start;
     overflow-x: auto;
+  }
+
+  .sub-link-dialog {
+    gap: 12px;
+  }
+
+  .sub-link-dialog__intro,
+  .sub-link-card {
+    padding: 12px;
+    border-radius: 12px;
+  }
+
+  .sub-link-dialog__profile {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .sub-link-dialog__profile strong {
+    max-width: 100%;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .sub-link-warning {
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+  }
+
+  .sub-link-card__header {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .sub-link-card__header :deep(.el-button) {
+    width: 100%;
+    min-height: 42px;
+  }
+
+  .sub-link-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .sub-link-row :deep(.el-button) {
+    width: 100%;
+    min-height: 42px;
+  }
+
+  .copy-input :deep(.el-input__wrapper) {
+    min-height: 42px;
   }
 
   .mobile-action-bar {
