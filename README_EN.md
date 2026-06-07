@@ -1,11 +1,15 @@
 # ClashSubAST - Subscription Customization & Secure Distribution Platform
 
 <p align="center">
+  <a href="README.md">简体中文</a> | English
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Go-1.26%2B-00ADD8?style=flat-square&logo=go" alt="Go Version">
   <img src="https://img.shields.io/badge/Vue-3.x-4FC08D?style=flat-square&logo=vue.js" alt="Vue Version">
   <img src="https://img.shields.io/badge/Vite-8.x-646CFF?style=flat-square&logo=vite" alt="Vite Version">
   <img src="https://img.shields.io/badge/PostgreSQL-13%2B-4169E1?style=flat-square&logo=postgresql" alt="PostgreSQL Version">
-  <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/License-No--Sale-red?style=flat-square" alt="No-Sale License">
 </p>
 
 `ClashSubAST` is a self-hosted subscription management platform for Clash/Mihomo, Surge, and Shadowrocket. It brings remote subscriptions, local manual profiles, custom nodes, proxy groups, routing rules, and multi-client output formats into one visual dashboard. It is designed for users who need to maintain multiple proxy configurations over time while reducing subscription link leakage risk.
@@ -260,4 +264,4 @@ Note: the current Compose file does not create a PostgreSQL container or the ext
 
 ## 📄 License
 
-This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
+This project is distributed under the custom **ClashSubAST No-Sale License**. Free use, copying, modification, distribution, and internal deployment are allowed, but selling this project is prohibited. Selling any version developed from, modified from, renamed from, repackaged from, or derived from this project is also prohibited, including paid source code, paid installers, and paid SaaS/hosted services where this project or its derivatives are the core product. See [LICENSE](LICENSE) for the full terms.

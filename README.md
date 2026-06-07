@@ -1,11 +1,15 @@
 # ClashSubAST 订阅定制与安全分发平台
 
 <p align="center">
+  简体中文 | <a href="README_EN.md">English</a>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Go-1.26%2B-00ADD8?style=flat-square&logo=go" alt="Go Version">
   <img src="https://img.shields.io/badge/Vue-3.x-4FC08D?style=flat-square&logo=vue.js" alt="Vue Version">
   <img src="https://img.shields.io/badge/Vite-8.x-646CFF?style=flat-square&logo=vite" alt="Vite Version">
   <img src="https://img.shields.io/badge/PostgreSQL-13%2B-4169E1?style=flat-square&logo=postgresql" alt="PostgreSQL Version">
-  <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/License-No--Sale-red?style=flat-square" alt="No-Sale License">
 </p>
 
 `ClashSubAST` 是一个面向 Clash/Mihomo、Surge 与 Shadowrocket 的私有化订阅管理平台。它把远程订阅、本地手动配置、自定义节点、策略组、分流规则和多客户端格式输出集中到一个可视化后台中，适合需要长期维护多套代理配置并降低订阅链接泄漏风险的个人或小团队。
@@ -258,6 +262,6 @@ docker compose up -d --build
 
 ---
 
-## 📄 开源协议
+## 📄 许可证
 
-本项目基于 **MIT License** 开源。详情参见 [LICENSE](LICENSE) 文件。
+本项目采用自定义 **ClashSubAST 禁止售卖许可 (No-Sale License)**。允许免费使用、复制、修改、分发和内部部署，但禁止直接售卖本项目，禁止售卖任何基于本项目继续开发、修改、重命名、换壳、打包或派生的版本，也禁止将其作为付费源码、付费安装包、付费 SaaS/托管服务的核心商品销售。完整条款参见 [LICENSE](LICENSE)。
