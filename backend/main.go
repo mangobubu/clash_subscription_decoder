@@ -101,6 +101,7 @@ func main() {
 	api.GET("/profiles/:id/sub-token", handleGetProfileSubToken)
 	api.POST("/profiles/:id/generate-sub-token", handleGenerateProfileSubToken)
 	api.POST("/profiles/:id/copy-rules", handleCopyProfileRules)
+	api.POST("/profiles/:id/copy-groups", handleCopyProfileGroups)
 	api.POST("/profiles/:id/localize-rules", handleLocalizeProfileRules)
 	api.GET("/subscription", handleGetSubscription)
 	api.PUT("/resource-orders", handleUpdateResourceOrder)
@@ -626,6 +627,17 @@ type manualProxyGroupConfig struct {
 	Name    string   `yaml:"name"`
 	Type    string   `yaml:"type"`
 	Proxies []string `yaml:"proxies"`
+	Extra   string   `yaml:"-"`
+}
+
+func (g manualProxyGroupConfig) MarshalYAML() (interface{}, error) {
+	groupMap := map[string]interface{}{
+		"name":    g.Name,
+		"type":    g.Type,
+		"proxies": g.Proxies,
+	}
+	mergeProxyGroupExtraMap(groupMap, g.Extra)
+	return groupMap, nil
 }
 
 // BuildManualProfileYAML 根据本地配置下手动维护的节点、策略组和规则生成 Clash/Mihomo YAML。
@@ -767,6 +779,7 @@ func buildManualProxyGroups(groups []CustomProxyGroup, nodeNames []string, needs
 			Name:    group.Name,
 			Type:    group.Type,
 			Proxies: expandManualGroupProxies(group, nodeNames),
+			Extra:   group.Extra,
 		}
 		if groupConfig.Name == manualDefaultProxyGroupName {
 			hasDefaultProxyGroup = true
@@ -821,6 +834,28 @@ func defaultManualProxyGroup(nodeNames []string) manualProxyGroupConfig {
 		Name:    manualDefaultProxyGroupName,
 		Type:    "select",
 		Proxies: proxies,
+	}
+}
+
+func mergeProxyGroupExtraMap(groupMap map[string]interface{}, extraJSON string) {
+	if strings.TrimSpace(extraJSON) == "" {
+		return
+	}
+	var extra map[string]interface{}
+	if err := json.Unmarshal([]byte(extraJSON), &extra); err != nil {
+		return
+	}
+	for key, value := range extra {
+		key = strings.TrimSpace(key)
+		if key == "" || copiedGroupProviderScopedExtraKeys[key] {
+			continue
+		}
+		switch key {
+		case "name", "type", "proxies":
+			continue
+		default:
+			groupMap[key] = value
+		}
 	}
 }
 
@@ -1079,6 +1114,191 @@ func mergeProfileRules(targetRules, sourceRules []CustomRule, targetProfileID ui
 	return result
 }
 
+var copiedGroupProviderScopedExtraKeys = map[string]bool{
+	"use":            true,
+	"filter":         true,
+	"exclude-filter": true,
+	"exclude-type":   true,
+}
+
+func ensureProfileDecodedContent(profile *SubscriptionProfile) (string, error) {
+	if strings.TrimSpace(profile.Decoded) != "" {
+		return profile.Decoded, nil
+	}
+	if err := refreshProfileCache(profile); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(profile.Decoded) == "" {
+		return "", fmt.Errorf("来源配置暂无可复制的最终 YAML")
+	}
+	return profile.Decoded, nil
+}
+
+func extractCopyableProxyGroupsFromYAML(yamlContent string, targetProfileID uint) ([]CustomProxyGroup, []string, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(yamlContent), &root); err != nil {
+		return nil, nil, fmt.Errorf("解析来源 YAML 失败: %w", err)
+	}
+	if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return nil, nil, fmt.Errorf("来源 YAML 格式无效")
+	}
+
+	docNode := root.Content[0]
+	proxyNames := yamlSequenceNamesFromNode(findTopLevelSequenceNode(docNode, "proxies"))
+	proxyNameSet := make(map[string]bool, len(proxyNames))
+	for _, name := range proxyNames {
+		proxyNameSet[name] = true
+	}
+
+	groupsNode := findTopLevelSequenceNode(docNode, "proxy-groups")
+	if groupsNode == nil {
+		return nil, nil, fmt.Errorf("来源配置没有 proxy-groups")
+	}
+
+	groupNames := yamlSequenceNamesFromNode(groupsNode)
+	groupNameSet := make(map[string]bool, len(groupNames))
+	for _, name := range groupNames {
+		groupNameSet[name] = true
+	}
+
+	groups := make([]CustomProxyGroup, 0, len(groupsNode.Content))
+	orderNames := make([]string, 0, len(groupsNode.Content))
+	seenNames := make(map[string]bool, len(groupsNode.Content))
+	for _, groupNode := range groupsNode.Content {
+		group, ok, err := copyableProxyGroupFromYAMLNode(groupNode, targetProfileID, proxyNameSet, groupNameSet)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !ok || seenNames[group.Name] {
+			continue
+		}
+		seenNames[group.Name] = true
+		groups = append(groups, group)
+		orderNames = append(orderNames, group.Name)
+	}
+	if len(groups) == 0 {
+		return nil, nil, fmt.Errorf("来源配置没有可复制的代理组")
+	}
+	return groups, orderNames, nil
+}
+
+func copyableProxyGroupFromYAMLNode(node *yaml.Node, targetProfileID uint, proxyNameSet, groupNameSet map[string]bool) (CustomProxyGroup, bool, error) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return CustomProxyGroup{}, false, nil
+	}
+
+	var name, groupType string
+	var proxiesNode *yaml.Node
+	extra := make(map[string]interface{})
+	for i := 0; i < len(node.Content)-1; i += 2 {
+		key := strings.TrimSpace(node.Content[i].Value)
+		valueNode := node.Content[i+1]
+		switch key {
+		case "name":
+			name = strings.TrimSpace(valueNode.Value)
+		case "type":
+			groupType = strings.TrimSpace(valueNode.Value)
+		case "proxies":
+			proxiesNode = valueNode
+		default:
+			if copiedGroupProviderScopedExtraKeys[key] {
+				continue
+			}
+			var value interface{}
+			if err := valueNode.Decode(&value); err == nil {
+				extra[key] = value
+			}
+		}
+	}
+	if name == "" {
+		return CustomProxyGroup{}, false, nil
+	}
+	if groupType == "" {
+		groupType = "select"
+	}
+
+	proxies := copyableProxyGroupMembers(proxiesNode, proxyNameSet, groupNameSet)
+	if len(proxies) == 0 {
+		proxies = []string{"[ALL_NODES]"}
+	}
+
+	proxiesBytes, err := json.Marshal(proxies)
+	if err != nil {
+		return CustomProxyGroup{}, false, err
+	}
+	extraBytes, err := json.Marshal(extra)
+	if err != nil {
+		return CustomProxyGroup{}, false, err
+	}
+
+	return CustomProxyGroup{
+		ProfileID: targetProfileID,
+		Name:      name,
+		Type:      groupType,
+		Proxies:   string(proxiesBytes),
+		Extra:     string(extraBytes),
+	}, true, nil
+}
+
+func copyableProxyGroupMembers(proxiesNode *yaml.Node, proxyNameSet, groupNameSet map[string]bool) []string {
+	if proxiesNode == nil || proxiesNode.Kind != yaml.SequenceNode {
+		return []string{"[ALL_NODES]"}
+	}
+
+	members := []string{}
+	seen := map[string]bool{}
+	hasAllNodes := false
+	appendMember := func(member string) {
+		member = strings.TrimSpace(member)
+		if member == "" || seen[member] {
+			return
+		}
+		seen[member] = true
+		members = append(members, member)
+	}
+
+	for _, item := range proxiesNode.Content {
+		member := strings.TrimSpace(item.Value)
+		if member == "" {
+			continue
+		}
+		if proxyNameSet[member] {
+			hasAllNodes = true
+			continue
+		}
+		if groupNameSet[member] || isBuiltInProxyPolicy(member) || member == "[ALL_NODES]" {
+			appendMember(member)
+		}
+	}
+
+	if hasAllNodes && !seen["[ALL_NODES]"] {
+		members = append([]string{"[ALL_NODES]"}, members...)
+	}
+	return members
+}
+
+func isBuiltInProxyPolicy(policy string) bool {
+	switch strings.ToUpper(strings.TrimSpace(policy)) {
+	case "DIRECT", "REJECT", "REJECT-DROP", "PASS":
+		return true
+	default:
+		return false
+	}
+}
+
+func yamlSequenceNamesFromNode(seq *yaml.Node) []string {
+	if seq == nil || seq.Kind != yaml.SequenceNode {
+		return nil
+	}
+	names := make([]string, 0, len(seq.Content))
+	for _, item := range seq.Content {
+		if name := yamlMappingName(item); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 func handleCopyProfileRules(c *gin.Context) {
 	targetProfile, ok := getProfileFromParam(c)
 	if !ok {
@@ -1129,6 +1349,87 @@ func handleCopyProfileRules(c *gin.Context) {
 
 	ReapplyRulesToProfile(targetProfile.ID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "规则复制成功", "data": gin.H{"copied": len(sourceRules), "total": len(mergedRules)}})
+}
+
+func handleCopyProfileGroups(c *gin.Context) {
+	targetProfile, ok := getProfileFromParam(c)
+	if !ok {
+		return
+	}
+
+	var req copyProfileRulesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+	if req.SourceProfileID == targetProfile.ID {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "不能从当前配置复制代理组"})
+		return
+	}
+
+	var sourceProfile SubscriptionProfile
+	if err := DB.First(&sourceProfile, req.SourceProfileID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "来源配置不存在"})
+		return
+	}
+
+	sourceYAML, err := ensureProfileDecodedContent(&sourceProfile)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "读取来源代理组失败", "error": err.Error()})
+		return
+	}
+
+	sourceGroups, orderNames, err := extractCopyableProxyGroupsFromYAML(sourceYAML, targetProfile.ID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("profile_id = ?", targetProfile.ID).Delete(&CustomProxyGroup{}).Error; err != nil {
+			return err
+		}
+		if len(sourceGroups) > 0 {
+			if err := tx.Create(&sourceGroups).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("profile_id = ? AND resource_type = ?", targetProfile.ID, resourceOrderTypeGroups).Delete(&ProfileResourceOrder{}).Error; err != nil {
+			return err
+		}
+		cleanedOrder := cleanResourceOrderNames(orderNames)
+		if len(cleanedOrder) > 0 {
+			orders := make([]ProfileResourceOrder, 0, len(cleanedOrder))
+			for idx, name := range cleanedOrder {
+				orders = append(orders, ProfileResourceOrder{
+					ProfileID:    targetProfile.ID,
+					ResourceType: resourceOrderTypeGroups,
+					Name:         name,
+					SortOrder:    idx,
+				})
+			}
+			if err := tx.Create(&orders).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(&SubscriptionProfile{}).
+			Where("id = ?", targetProfile.ID).
+			Update("groups_mode", profileGroupsModeOverride).Error
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "复制代理组失败", "error": err.Error()})
+		return
+	}
+
+	ReapplyRulesToProfile(targetProfile.ID)
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "代理组复制成功",
+		"data": gin.H{
+			"copied": len(sourceGroups),
+			"total":  len(sourceGroups),
+		},
+	})
 }
 
 func parseSubscriptionRuleLine(ruleLine string, profileID uint) (CustomRule, bool) {
@@ -1616,6 +1917,7 @@ func handleCreateCustomGroup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存失败", "error": err.Error()})
 		return
 	}
+	DB.Model(&SubscriptionProfile{}).Where("id = ?", profileID).Update("groups_mode", profileGroupsModeMerge)
 	ReapplyRulesToProfile(profileID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "保存成功", "data": group})
 }
@@ -1665,6 +1967,11 @@ func handleDeleteCustomGroup(c *gin.Context) {
 	if err := DB.Delete(&group).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除失败", "error": err.Error()})
 		return
+	}
+	var remainingCount int64
+	DB.Model(&CustomProxyGroup{}).Where("profile_id = ?", group.ProfileID).Count(&remainingCount)
+	if remainingCount == 0 {
+		DB.Model(&SubscriptionProfile{}).Where("id = ?", group.ProfileID).Update("groups_mode", profileGroupsModeMerge)
 	}
 	ReapplyRulesToProfile(group.ProfileID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功"})
@@ -2333,12 +2640,23 @@ func injectCustomGroups(yamlContent string, profileID uint) string {
 		}
 	}
 
+	customGroups, _ := GetCustomProxyGroups(profileID)
 	if proxyGroupsNode == nil || proxyGroupsNode.Kind != yaml.SequenceNode {
-		return yamlContent
+		if len(customGroups) == 0 {
+			return yamlContent
+		}
+		proxyGroupsNode = &yaml.Node{Kind: yaml.SequenceNode}
+		docNode.Content = append(docNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "proxy-groups"},
+			proxyGroupsNode,
+		)
+	}
+
+	if shouldOverrideProfileProxyGroups(profileID, len(customGroups)) {
+		proxyGroupsNode.Content = nil
 	}
 
 	// 获取数据库里的自定义组并无损注入
-	customGroups, _ := GetCustomProxyGroups(profileID)
 	for _, cg := range customGroups {
 		proxiesList := cg.GetProxiesList()
 
@@ -2373,15 +2691,7 @@ func injectCustomGroups(yamlContent string, profileID uint) string {
 			proxiesSeq.Content = append(proxiesSeq.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: p})
 		}
 
-		groupMap := &yaml.Node{Kind: yaml.MappingNode}
-		groupMap.Content = append(groupMap.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Value: "name"},
-			&yaml.Node{Kind: yaml.ScalarNode, Value: cg.Name},
-			&yaml.Node{Kind: yaml.ScalarNode, Value: "type"},
-			&yaml.Node{Kind: yaml.ScalarNode, Value: cg.Type},
-			&yaml.Node{Kind: yaml.ScalarNode, Value: "proxies"},
-			proxiesSeq,
-		)
+		groupMap := proxyGroupYAMLNode(cg, proxiesSeq)
 
 		proxyGroupsNode.Content = append(proxyGroupsNode.Content, groupMap)
 	}
@@ -2396,6 +2706,61 @@ func injectCustomGroups(yamlContent string, profileID uint) string {
 		return yamlContent
 	}
 	return string(out)
+}
+
+func shouldOverrideProfileProxyGroups(profileID uint, customGroupCount int) bool {
+	if customGroupCount == 0 {
+		return false
+	}
+	var profile SubscriptionProfile
+	if err := DB.Select("id", "groups_mode").First(&profile, profileID).Error; err != nil {
+		return false
+	}
+	return profile.GroupsMode == profileGroupsModeOverride
+}
+
+func proxyGroupYAMLNode(group CustomProxyGroup, proxiesSeq *yaml.Node) *yaml.Node {
+	groupMap := &yaml.Node{Kind: yaml.MappingNode}
+	appendScalarField := func(key, value string) {
+		groupMap.Content = append(groupMap.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: value},
+		)
+	}
+
+	appendScalarField("name", group.Name)
+	appendScalarField("type", group.Type)
+	groupMap.Content = append(groupMap.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "proxies"},
+		proxiesSeq,
+	)
+
+	if strings.TrimSpace(group.Extra) == "" {
+		return groupMap
+	}
+	var extra map[string]interface{}
+	if err := json.Unmarshal([]byte(group.Extra), &extra); err != nil {
+		return groupMap
+	}
+	for key, value := range extra {
+		key = strings.TrimSpace(key)
+		if key == "" || copiedGroupProviderScopedExtraKeys[key] {
+			continue
+		}
+		switch key {
+		case "name", "type", "proxies":
+			continue
+		}
+		valueNode := &yaml.Node{}
+		if err := valueNode.Encode(value); err != nil {
+			continue
+		}
+		groupMap.Content = append(groupMap.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+			valueNode,
+		)
+	}
+	return groupMap
 }
 
 func applyProfileResourceOrderToYAML(yamlContent string, profileID uint, resourceType string) string {

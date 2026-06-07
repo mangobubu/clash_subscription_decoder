@@ -953,6 +953,9 @@ const handleDownload = () => {
 const groupDialogVisible = ref(false);
 const isSubmittingGroup = ref(false);
 const editingGroupId = ref<number | null>(null);
+const copyGroupsDialogVisible = ref(false);
+const isCopyingGroups = ref(false);
+const copyGroupsSourceProfileId = ref<number | null>(null);
 
 const newGroupForm = ref({
   name: "",
@@ -967,10 +970,49 @@ const builtInGroupProxies = [
   { label: "REJECT (拒绝)", value: "REJECT" },
 ];
 
+const copyGroupSourceOptions = computed(() =>
+  profiles.value.filter((profile) => profile.id !== activeProfileId.value),
+);
+
 const openGroupDialog = () => {
   editingGroupId.value = null;
   newGroupForm.value = { name: "", type: "select", proxies: [], exclude: "" };
   groupDialogVisible.value = true;
+};
+
+const openCopyGroupsDialog = () => {
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
+  copyGroupsSourceProfileId.value = copyGroupSourceOptions.value[0]?.id || null;
+  copyGroupsDialogVisible.value = true;
+};
+
+const copyGroupsFromProfile = async () => {
+  if (!activeProfileId.value || !copyGroupsSourceProfileId.value) {
+    ElMessage.warning("请选择来源配置");
+    return;
+  }
+  isCopyingGroups.value = true;
+  try {
+    const res = await axios.post(
+      buildBackendUrl(`/api/profiles/${activeProfileId.value}/copy-groups`),
+      { source_profile_id: copyGroupsSourceProfileId.value },
+    );
+    if (res.data.code === 200) {
+      ElMessage.success(`代理组复制成功，来源代理组 ${res.data.data?.copied || 0} 个`);
+      copyGroupsDialogVisible.value = false;
+      await fetchCustomData();
+      await loadSubscription({ preferredTab: "groups" });
+    } else {
+      ElMessage.error(res.data.message || "复制代理组失败");
+    }
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.message || "复制代理组失败");
+  } finally {
+    isCopyingGroups.value = false;
+  }
 };
 
 const editCustomGroup = (groupName: string) => {
@@ -2032,6 +2074,15 @@ const submitChangePassword = async () => {
 	            >
 	              刷新当前
 	            </el-button>
+	            <el-button
+	              type="warning"
+	              plain
+	              icon="CopyDocument"
+	              :disabled="copyGroupSourceOptions.length === 0"
+	              @click="openCopyGroupsDialog"
+	            >
+	              复制代理组
+	            </el-button>
 	          </div>
 	          <div v-if="currentProfile?.source_type === 'local'" class="manual-config-actions">
 	            <el-button type="primary" plain icon="Plus" @click="openNodeDialog">
@@ -2367,6 +2418,15 @@ const submitChangePassword = async () => {
                 <el-tag v-if="isSavingGroupOrder" type="warning" effect="dark">
                   排序保存中...
                 </el-tag>
+                <el-button
+                  type="warning"
+                  plain
+                  round
+                  :disabled="copyGroupSourceOptions.length === 0"
+                  @click="openCopyGroupsDialog"
+                >
+                  从其他配置复制代理组
+                </el-button>
                 <el-button
                   type="primary"
                   effect="dark"
@@ -2768,6 +2828,39 @@ const submitChangePassword = async () => {
 	        <el-button @click="profileDialogVisible = false" plain>取消</el-button>
 	        <el-button type="primary" :loading="isSubmittingProfile" @click="saveProfile">
 	          保存配置
+	        </el-button>
+	      </template>
+	    </el-dialog>
+
+	    <!-- 代理组复制弹窗 -->
+	    <el-dialog
+	      v-model="copyGroupsDialogVisible"
+	      title="从其他配置复制代理组"
+	      width="540px"
+	      class="glass-dialog"
+	    >
+	      <el-form label-position="top">
+	        <el-form-item label="来源配置">
+	          <el-select v-model="copyGroupsSourceProfileId" style="width: 100%" popper-class="glass-dropdown">
+	            <el-option
+	              v-for="profile in copyGroupSourceOptions"
+	              :key="profile.id"
+	              :label="profile.name"
+	              :value="profile.id"
+	            />
+	          </el-select>
+	        </el-form-item>
+	        <el-alert
+	          type="warning"
+	          show-icon
+	          :closable="false"
+	          title="复制后会清空当前配置的自定义代理组，最终代理组只保留来源配置的代理组结构。来源节点会替换为当前配置全部节点，分流规则不会自动复制。"
+	        />
+	      </el-form>
+	      <template #footer>
+	        <el-button @click="copyGroupsDialogVisible = false" plain>取消</el-button>
+	        <el-button type="warning" :loading="isCopyingGroups" @click="copyGroupsFromProfile">
+	          确认复制
 	        </el-button>
 	      </template>
 	    </el-dialog>

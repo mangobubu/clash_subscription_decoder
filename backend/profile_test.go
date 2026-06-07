@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -83,6 +84,108 @@ func TestMergeProfileRulesPreservesTargetAndLetsSourceOverride(t *testing.T) {
 	if byKey["MATCH\x00-"].Target != "DIRECT" {
 		t.Fatal("source-only rule was not added")
 	}
+}
+
+func TestExtractCopyableProxyGroupsFromYAMLFoldsSourceNodesAndKeepsExtra(t *testing.T) {
+	content := `proxies:
+  - name: 香港 01
+    type: ss
+  - name: 美国 02
+    type: trojan
+proxy-groups:
+  - name: 自动选择
+    type: url-test
+    proxies:
+      - 香港 01
+      - 美国 02
+      - DIRECT
+    url: http://test.example/generate_204
+    interval: 300
+    tolerance: 80
+    use:
+      - remote-provider
+    filter: 港
+  - name: 兜底策略
+    type: fallback
+    proxies:
+      - 自动选择
+      - REJECT
+`
+
+	groups, orderNames, err := extractCopyableProxyGroupsFromYAML(content, 10)
+	if err != nil {
+		t.Fatalf("extractCopyableProxyGroupsFromYAML returned error: %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("groups length = %d, want 2", len(groups))
+	}
+	assertStringSliceEqual(t, orderNames, []string{"自动选择", "兜底策略"})
+
+	if groups[0].ProfileID != 10 {
+		t.Fatalf("copied group ProfileID = %d, want 10", groups[0].ProfileID)
+	}
+	assertStringSliceEqual(t, groups[0].GetProxiesList(), []string{"[ALL_NODES]", "DIRECT"})
+	assertStringSliceEqual(t, groups[1].GetProxiesList(), []string{"自动选择", "REJECT"})
+
+	var extra map[string]interface{}
+	if err := json.Unmarshal([]byte(groups[0].Extra), &extra); err != nil {
+		t.Fatalf("extra JSON invalid: %v", err)
+	}
+	if extra["url"] != "http://test.example/generate_204" {
+		t.Fatalf("extra url = %v", extra["url"])
+	}
+	if _, ok := extra["use"]; ok {
+		t.Fatal("provider scoped use field should be removed")
+	}
+	if _, ok := extra["filter"]; ok {
+		t.Fatal("provider scoped filter field should be removed")
+	}
+}
+
+func TestBuildManualProfileYAMLFromResourcesKeepsCopiedGroupExtraAndOrder(t *testing.T) {
+	extraBytes, err := json.Marshal(map[string]interface{}{
+		"url":       "http://test.example/generate_204",
+		"interval":  300,
+		"tolerance": 80,
+		"use":       []string{"remote-provider"},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal extra returned error: %v", err)
+	}
+
+	nodes := []CustomNode{
+		{
+			Name:   "香港 01",
+			Type:   "ss",
+			Server: "127.0.0.1",
+			Port:   8388,
+			Config: `{"name":"香港 01","type":"ss","server":"127.0.0.1","port":8388}`,
+		},
+		{
+			Name:   "美国 02",
+			Type:   "trojan",
+			Server: "127.0.0.2",
+			Port:   443,
+			Config: `{"name":"美国 02","type":"trojan","server":"127.0.0.2","port":443}`,
+		},
+	}
+	groups := []CustomProxyGroup{
+		{Name: "自动选择", Type: "url-test", Proxies: `["[ALL_NODES]","DIRECT"]`, Extra: string(extraBytes)},
+		{Name: "兜底策略", Type: "fallback", Proxies: `["自动选择","REJECT"]`},
+	}
+
+	rules := []CustomRule{{Type: "MATCH", Payload: "-", Target: "自动选择"}}
+	got, err := buildManualProfileYAMLFromResources(nodes, applyCustomGroupOrder(groups, []string{"兜底策略", "自动选择"}), rules)
+	if err != nil {
+		t.Fatalf("buildManualProfileYAMLFromResources returned error: %v", err)
+	}
+
+	assertStringSliceEqual(t, yamlSequenceNames(t, got, "proxy-groups"), []string{"兜底策略", "自动选择"})
+	assertYAMLGroupProxiesEqual(t, got, "自动选择", []string{"香港 01", "美国 02", "DIRECT"})
+	assertYAMLGroupScalarEqual(t, got, "自动选择", "url", "http://test.example/generate_204")
+	assertYAMLGroupScalarEqual(t, got, "自动选择", "interval", "300")
+	assertYAMLGroupScalarEqual(t, got, "自动选择", "tolerance", "80")
+	assertYAMLGroupFieldAbsent(t, got, "自动选择", "use")
 }
 
 func TestLooksLikePlainSubscriptionConfigAcceptsProviderOnlyYaml(t *testing.T) {
@@ -498,6 +601,76 @@ func yamlSequenceScalars(t *testing.T, content string, key string) []string {
 		values = append(values, item.Value)
 	}
 	return values
+}
+
+func yamlProxyGroupNode(t *testing.T, content string, groupName string) *yaml.Node {
+	t.Helper()
+
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(content), &root); err != nil {
+		t.Fatalf("yaml.Unmarshal returned error: %v\n%s", err, content)
+	}
+	if len(root.Content) == 0 {
+		t.Fatalf("YAML content is empty:\n%s", content)
+	}
+
+	seq := findTopLevelSequenceNode(root.Content[0], "proxy-groups")
+	if seq == nil {
+		t.Fatalf("YAML missing proxy-groups:\n%s", content)
+	}
+	for _, item := range seq.Content {
+		if yamlMappingName(item) == groupName {
+			return item
+		}
+	}
+	t.Fatalf("YAML missing proxy group %q:\n%s", groupName, content)
+	return nil
+}
+
+func yamlMappingValueNode(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i < len(node.Content)-1; i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func assertYAMLGroupProxiesEqual(t *testing.T, content string, groupName string, want []string) {
+	t.Helper()
+	groupNode := yamlProxyGroupNode(t, content, groupName)
+	proxiesNode := yamlMappingValueNode(groupNode, "proxies")
+	if proxiesNode == nil || proxiesNode.Kind != yaml.SequenceNode {
+		t.Fatalf("group %q missing proxies sequence:\n%s", groupName, content)
+	}
+	got := make([]string, 0, len(proxiesNode.Content))
+	for _, item := range proxiesNode.Content {
+		got = append(got, item.Value)
+	}
+	assertStringSliceEqual(t, got, want)
+}
+
+func assertYAMLGroupScalarEqual(t *testing.T, content string, groupName string, key string, want string) {
+	t.Helper()
+	groupNode := yamlProxyGroupNode(t, content, groupName)
+	valueNode := yamlMappingValueNode(groupNode, key)
+	if valueNode == nil {
+		t.Fatalf("group %q missing field %q:\n%s", groupName, key, content)
+	}
+	if valueNode.Value != want {
+		t.Fatalf("group %q field %q = %q, want %q", groupName, key, valueNode.Value, want)
+	}
+}
+
+func assertYAMLGroupFieldAbsent(t *testing.T, content string, groupName string, key string) {
+	t.Helper()
+	groupNode := yamlProxyGroupNode(t, content, groupName)
+	if valueNode := yamlMappingValueNode(groupNode, key); valueNode != nil {
+		t.Fatalf("group %q field %q should be absent, got %q", groupName, key, valueNode.Value)
+	}
 }
 
 func assertStringSliceEqual(t *testing.T, got []string, want []string) {

@@ -36,6 +36,11 @@ const (
 	resourceOrderTypeGroups = "groups"
 )
 
+const (
+	profileGroupsModeMerge    = "merge"
+	profileGroupsModeOverride = "override"
+)
+
 type Config struct {
 	Server struct {
 		Port int `toml:"port"`
@@ -77,6 +82,7 @@ type CustomProxyGroup struct {
 	Type      string `gorm:"not null"`
 	Proxies   string `gorm:"type:text;not null"` // JSON array of string
 	Exclude   string `gorm:"type:text"`          // 排除关键字或正则表达式
+	Extra     string `gorm:"type:text"`          // JSON object for preserved Clash/Mihomo group fields
 	CreatedAt int64  `gorm:"autoCreateTime"`
 }
 
@@ -118,6 +124,7 @@ type SubscriptionProfile struct {
 	RawResponse  string `gorm:"type:text" json:"raw_response"`
 	Decoded      string `gorm:"type:text" json:"decoded"`
 	SubToken     string `gorm:"type:text;index" json:"sub_token"`
+	GroupsMode   string `gorm:"size:32;not null;default:merge" json:"groups_mode"`
 	CreatedAt    int64  `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt    int64  `gorm:"autoUpdateTime" json:"updated_at"`
 }
