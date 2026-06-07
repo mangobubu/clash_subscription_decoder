@@ -11,7 +11,7 @@ import (
 
 func main() {
 	fmt.Println("==================================================")
-	fmt.Println("       ClashSubAST 全栈一键自动化构建系统")
+	fmt.Println("       Clash Subscription Decoder 全栈一键自动化构建系统")
 	fmt.Println("==================================================")
 
 	// 1. 确定项目目录结构
@@ -28,7 +28,7 @@ func main() {
 	// 验证前后端文件夹是否存在
 	if !dirExists(frontendDir) || !dirExists(backendDir) {
 		fmt.Println("❌ 错误: 未能在当前目录下找到 'frontend' 或 'backend' 文件夹！")
-		fmt.Println("💡 请确保您在 clash-proxy 项目根目录下运行此脚本。")
+		fmt.Println("💡 请确保您在 clash-subscription-decoder 项目根目录下运行此脚本。")
 		os.Exit(1)
 	}
 
@@ -68,9 +68,9 @@ func main() {
 	fmt.Printf("✅ 前端打包并直出至 backend/dist 成功！\n\n")
 
 	// 5. 执行后端 Go 二进制编译并输出到 release 目录
-	binaryName := "ClashSubAST"
+	binaryName := "Clash Subscription Decoder"
 	if runtime.GOOS == "windows" {
-		binaryName = "ClashSubAST.exe"
+		binaryName = "Clash Subscription Decoder.exe"
 	}
 	binaryPath := filepath.Join(releaseDir, binaryName)
 	fmt.Printf("🔨 正在编译 Go 后端应用，并汇聚至 release/%s...\n", binaryName)
@@ -84,7 +84,7 @@ func main() {
 	fmt.Println("📝 正在进行运行配置的自动汇聚与保护...")
 	exampleSrc := filepath.Join(backendDir, "config.example.toml")
 	exampleDst := filepath.Join(releaseDir, "config.example.toml")
-	
+
 	// 清理 release 目录下冗余的 config.example.toml，保持部署文件夹的极致清爽与极简
 	if _, err := os.Stat(exampleDst); err == nil {
 		_ = os.Remove(exampleDst)

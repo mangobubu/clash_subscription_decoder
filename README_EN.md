@@ -1,4 +1,4 @@
-# ClashSubAST - Subscription Customization & Secure Distribution Platform
+# Clash Subscription Decoder
 
 <p align="center">
   <a href="README.md">简体中文</a> | English
@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/License-No--Sale-red?style=flat-square" alt="No-Sale License">
 </p>
 
-`ClashSubAST` is a self-hosted subscription management platform for Clash/Mihomo, Surge, and Shadowrocket. It brings remote subscriptions, local manual profiles, custom nodes, proxy groups, routing rules, and multi-client output formats into one visual dashboard. It is designed for users who need to maintain multiple proxy configurations over time while reducing subscription link leakage risk.
+`Clash Subscription Decoder` is a self-hosted subscription management platform for Clash/Mihomo, Surge, and Shadowrocket. It brings remote subscriptions, local manual profiles, custom nodes, proxy groups, routing rules, and multi-client output formats into one visual dashboard. It is designed for users who need to maintain multiple proxy configurations over time while reducing subscription link leakage risk.
 
 Traditional online subscription converters rarely preserve personalized configuration and require exposing subscription content to third-party services. This project focuses on storing configuration in your own environment, generating secure profile-specific subscription links, and keeping the last usable output available when refreshes fail.
 
@@ -115,8 +115,8 @@ Prepare the following first:
 - `pnpm` or `npm`
 
 ```bash
-git clone https://github.com/mangobubu/clash_proxy.git
-cd clash_proxy
+git clone https://github.com/mangobubu/clash-subscription-decoder.git
+cd clash-subscription-decoder
 ```
 
 ### 2. Backend Configuration & Run
@@ -138,7 +138,7 @@ port = 8080
 host = "127.0.0.1"
 user = "your_username"
 password = "your_password"
-dbname = "clash_proxy"
+dbname = "clash_subscription_decoder"
 port = 5432
 sslmode = "disable"
 timezone = "Asia/Shanghai"
@@ -189,7 +189,7 @@ Output layout:
 
 ```text
 release/
-├── ClashSubAST         # ClashSubAST.exe on Windows
+├── Clash Subscription Decoder         # Clash Subscription Decoder.exe on Windows
 └── config.toml         # Runtime configuration
 ```
 
@@ -264,4 +264,4 @@ Note: the current Compose file does not create a PostgreSQL container or the ext
 
 ## 📄 License
 
-This project is distributed under the custom **ClashSubAST No-Sale License**. Free use, copying, modification, distribution, and internal deployment are allowed, but selling this project is prohibited. Selling any version developed from, modified from, renamed from, repackaged from, or derived from this project is also prohibited, including paid source code, paid installers, and paid SaaS/hosted services where this project or its derivatives are the core product. See [LICENSE](LICENSE) for the full terms.
+This project is distributed under the custom **Clash Subscription Decoder No-Sale License**. Free use, copying, modification, distribution, and internal deployment are allowed, but selling this project is prohibited. Selling any version developed from, modified from, renamed from, repackaged from, or derived from this project is also prohibited, including paid source code, paid installers, and paid SaaS/hosted services where this project or its derivatives are the core product. See [LICENSE](LICENSE) for the full terms.

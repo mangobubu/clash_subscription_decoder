@@ -1,4 +1,4 @@
-# ClashSubAST 订阅定制与安全分发平台
+# Clash Subscription Decoder
 
 <p align="center">
   简体中文 | <a href="README_EN.md">English</a>
@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/License-No--Sale-red?style=flat-square" alt="No-Sale License">
 </p>
 
-`ClashSubAST` 是一个面向 Clash/Mihomo、Surge 与 Shadowrocket 的私有化订阅管理平台。它把远程订阅、本地手动配置、自定义节点、策略组、分流规则和多客户端格式输出集中到一个可视化后台中，适合需要长期维护多套代理配置并降低订阅链接泄漏风险的个人或小团队。
+`Clash Subscription Decoder` 是一个面向 Clash/Mihomo、Surge 与 Shadowrocket 的私有化订阅管理平台。它把远程订阅、本地手动配置、自定义节点、策略组、分流规则和多客户端格式输出集中到一个可视化后台中，适合需要长期维护多套代理配置并降低订阅链接泄漏风险的个人或小团队。
 
 传统在线订阅转换服务往往无法沉淀个性化配置，也会把订阅内容暴露给第三方服务。该项目的核心目标是：在自有环境中保存配置、按配置生成安全订阅地址，并在刷新失败时保留最近一次可用结果。
 
@@ -115,8 +115,8 @@ sequenceDiagram
 - `pnpm` 或 `npm`
 
 ```bash
-git clone https://github.com/mangobubu/clash_proxy.git
-cd clash_proxy
+git clone https://github.com/mangobubu/clash-subscription-decoder.git
+cd clash-subscription-decoder
 ```
 
 ### 2. 后端配置与运行
@@ -138,7 +138,7 @@ port = 8080
 host = "127.0.0.1"
 user = "your_username"
 password = "your_password"
-dbname = "clash_proxy"
+dbname = "clash_subscription_decoder"
 port = 5432
 sslmode = "disable"
 timezone = "Asia/Shanghai"
@@ -189,7 +189,7 @@ go run build.go
 
 ```text
 release/
-├── ClashSubAST         # Windows 下为 ClashSubAST.exe
+├── Clash Subscription Decoder         # Windows 下为 Clash Subscription Decoder.exe
 └── config.toml         # 运行配置文件
 ```
 
@@ -264,4 +264,4 @@ docker compose up -d --build
 
 ## 📄 许可证
 
-本项目采用自定义 **ClashSubAST 禁止售卖许可 (No-Sale License)**。允许免费使用、复制、修改、分发和内部部署，但禁止直接售卖本项目，禁止售卖任何基于本项目继续开发、修改、重命名、换壳、打包或派生的版本，也禁止将其作为付费源码、付费安装包、付费 SaaS/托管服务的核心商品销售。完整条款参见 [LICENSE](LICENSE)。
+本项目采用自定义 **Clash Subscription Decoder 禁止售卖许可 (No-Sale License)**。允许免费使用、复制、修改、分发和内部部署，但禁止直接售卖本项目，禁止售卖任何基于本项目继续开发、修改、重命名、换壳、打包或派生的版本，也禁止将其作为付费源码、付费安装包、付费 SaaS/托管服务的核心商品销售。完整条款参见 [LICENSE](LICENSE)。

@@ -1,5 +1,5 @@
 # =========================================================================
-#                    Clash Subscription Proxy Customization
+#                       Clash Subscription Decoder
 #                             Git Ignore System
 # =========================================================================
 
@@ -11,7 +11,7 @@ backend/tmp/
 backend/*.exe
 backend/server
 backend/tmp.exe
-backend/clash-proxy-backend
+backend/clash-subscription-decoder-backend
 
 # --- 前端依赖与编译产物 ---
 frontend/node_modules/

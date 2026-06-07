@@ -1,4 +1,4 @@
-module clash-proxy-backend
+module clash-subscription-decoder-backend
 
 go 1.26.3
 

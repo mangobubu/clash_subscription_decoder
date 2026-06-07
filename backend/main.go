@@ -178,7 +178,7 @@ func main() {
 
 	// 启动服务，端口由 config.toml 的 [server].port 或 SERVER_PORT 环境变量控制
 	serverAddress := fmt.Sprintf(":%d", AppConfig.Server.Port)
-	log.Printf("Starting Clash Proxy Decoder backend on %s...", serverAddress)
+	log.Printf("Starting Clash Subscription Decoder backend on %s...", serverAddress)
 	if err := r.Run(serverAddress); err != nil {
 		log.Fatalf("Failed to run server: %v", err)
 	}
@@ -1619,7 +1619,7 @@ func handleBackup(c *gin.Context) {
 		return
 	}
 
-	c.Header("Content-Disposition", "attachment; filename=\"clash_proxy_backup.json\"")
+	c.Header("Content-Disposition", "attachment; filename=\"clash_subscription_decoder_backup.json\"")
 	c.Data(http.StatusOK, "application/json", jsonData)
 }
 
@@ -3598,7 +3598,7 @@ rules:
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("[策略: %s] 请求网络失败: %w", strategy.Name, err)
-			log.Printf("[Clash-Proxy 后端诊断] 尝试 %d (%s) 失败，请求网络出错: %v", i+1, strategy.Name, err)
+			log.Printf("[Clash Subscription Decoder 后端诊断] 尝试 %d (%s) 失败，请求网络出错: %v", i+1, strategy.Name, err)
 			continue
 		}
 
@@ -3606,7 +3606,7 @@ rules:
 		resp.Body.Close()
 
 		// 极其关键的控制台实时排错日志 (AIR 中直观展示)
-		log.Printf("=================== [Clash-Proxy 诊断请求 %d - %s] ===================", i+1, strategy.Name)
+		log.Printf("=================== [Clash Subscription Decoder 诊断请求 %d - %s] ===================", i+1, strategy.Name)
 		log.Printf("请求 URL: %s", targetURL)
 		log.Printf("请求 UA  : %s", strategy.UA)
 		log.Printf("请求 Host: %s (原 URL.Host: %s)", req.Host, req.URL.Host)
@@ -3627,7 +3627,7 @@ rules:
 		}
 
 		candidate := newSubscriptionFetchCandidate(strategy.Name, string(bodyBytes))
-		log.Printf("[Clash-Proxy selector] strategy=%s format=%s nodes=%d score=%d", candidate.Strategy, candidate.Format, candidate.NodeCount, candidate.Score)
+		log.Printf("[Clash Subscription Decoder selector] strategy=%s format=%s nodes=%d score=%d", candidate.Strategy, candidate.Format, candidate.NodeCount, candidate.Score)
 		if isBetterSubscriptionFetchCandidate(candidate, bestCandidate) {
 			bestCandidate = candidate
 		}

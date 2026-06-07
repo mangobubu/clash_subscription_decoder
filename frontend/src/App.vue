@@ -2045,7 +2045,7 @@ const handleUserCommand = async (command: string) => {
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const link = document.createElement("a");
       link.href = url;
-      link.setAttribute("download", `clash_proxy_backup_${new Date().getTime()}.json`);
+      link.setAttribute("download", `clash_subscription_decoder_backup_${new Date().getTime()}.json`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -2280,7 +2280,7 @@ const submitChangePassword = async () => {
 	      <!-- 控制卡片面板 -->
 	      <section class="control-panel glass-card">
 	        <h2 class="section-title">
-	          {{ currentProfile?.source_type === 'local' ? '本地手动配置预览' : '自适应 Base64 地址获取器' }}
+	          {{ currentProfile?.source_type === 'local' ? '本地手动配置预览' : 'Clash Subscription Decoder' }}
 	        </h2>
 	        <p class="section-desc">
 	          <template v-if="currentProfile?.source_type === 'local'">
@@ -3615,7 +3615,7 @@ const submitChangePassword = async () => {
     <!-- 页脚版权说明 -->
     <footer class="main-footer">
       <p>
-        Base64 Subscription Analyzer & Decoder © 2026. Built with Gin & Vue 3 +
+        Clash Subscription Decoder © 2026. Built with Gin & Vue 3 +
         Element Plus.
       </p>
     </footer>

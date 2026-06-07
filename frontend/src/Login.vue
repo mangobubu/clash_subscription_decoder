@@ -2,7 +2,7 @@
   <div class="login-container">
     <div class="login-box">
       <div class="login-header">
-        <h2 class="title">{{ isInitMode ? '首次运行配置' : 'Clash Proxy Decoder' }}</h2>
+        <h2 class="title">{{ isInitMode ? '首次运行配置' : 'Clash Subscription Decoder' }}</h2>
         <p class="subtitle">{{ isInitMode ? '检测到系统尚未初始化，请创建超级管理员' : '安全控制台' }}</p>
       </div>
       

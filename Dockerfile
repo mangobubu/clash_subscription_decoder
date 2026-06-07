@@ -51,7 +51,7 @@ RUN apt-get update && \
 WORKDIR /app
 
 # 从构建阶段拷贝编译好的包含全量前端的独立全栈二进制程序
-COPY --from=builder /app/release/ClashSubAST /app/ClashSubAST
+COPY --from=builder ["/app/release/Clash Subscription Decoder", "/app/Clash Subscription Decoder"]
 
 # 服务默认监听端口，可被运行环境中的 SERVER_PORT 覆盖
 ENV SERVER_PORT=8080
@@ -60,4 +60,4 @@ ENV SERVER_PORT=8080
 EXPOSE 8080
 
 # 启动全栈应用 (运行目录中需挂载或提供 config.toml)
-CMD ["/app/ClashSubAST"]
+CMD ["/app/Clash Subscription Decoder"]
