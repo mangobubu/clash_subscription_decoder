@@ -125,6 +125,39 @@ proxies:
 	assertContains(t, got, "FINAL,PROXY")
 }
 
+func TestConvertClashYAMLToShadowrocketKeepsAnyTLS(t *testing.T) {
+	input := `
+proxies:
+  - name: AnyTLS One
+    type: anytls
+    server: any.example.com
+    port: 443
+    password: any-pass
+    sni: apple.com
+    skip-cert-verify: true
+    alpn:
+      - h2
+    udp: true
+proxy-groups:
+  - name: Auto
+    type: url-test
+    proxies:
+      - AnyTLS One
+      - DIRECT
+rules:
+  - MATCH,Auto
+`
+
+	got, err := ConvertClashYAMLToShadowrocket(input)
+	if err != nil {
+		t.Fatalf("ConvertClashYAMLToShadowrocket returned error: %v", err)
+	}
+
+	assertContains(t, got, "AnyTLS One = anytls,any.example.com,443,password=any-pass,peer=apple.com,allowInsecure=1,alpn=h2,udp=1")
+	assertContains(t, got, "Auto = url-test,AnyTLS One,DIRECT,url=http://www.gstatic.com/generate_204,interval=600")
+	assertContains(t, got, "FINAL,Auto")
+}
+
 func TestConvertClashYAMLToShadowrocketRejectsUnsupportedOnlyConfig(t *testing.T) {
 	input := `
 proxies:

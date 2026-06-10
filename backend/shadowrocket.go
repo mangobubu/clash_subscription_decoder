@@ -111,7 +111,7 @@ func ConvertClashYAMLToShadowrocket(yamlContent string) (string, error) {
 
 func isShadowrocketSupportedProxy(proxy map[string]any) bool {
 	switch strings.ToLower(valueAsString(proxy["type"])) {
-	case "ss", "socks5", "socks", "vless", "hysteria2", "hy2":
+	case "ss", "socks5", "socks", "vless", "hysteria2", "hy2", "anytls":
 		return true
 	default:
 		return false
@@ -142,6 +142,25 @@ func shadowrocketProxyLine(name string, proxy map[string]any) (string, bool) {
 			parts = append(parts, cleanShadowrocketValue(username), cleanShadowrocketValue(password))
 		}
 		return strings.Join(parts, ","), true
+	case "anytls":
+		password := firstNonEmpty(valueAsString(proxy["password"]), valueAsString(proxy["auth"]))
+		if password == "" {
+			return "", false
+		}
+		params := []string{"password=" + cleanShadowrocketValue(password)}
+		if sni := firstNonEmpty(valueAsString(proxy["sni"]), valueAsString(proxy["servername"]), valueAsString(proxy["peer"])); sni != "" {
+			params = append(params, "peer="+cleanShadowrocketValue(sni))
+		}
+		if truthy(proxy["skip-cert-verify"]) {
+			params = append(params, "allowInsecure=1")
+		}
+		if alpn := firstListValue(proxy["alpn"]); alpn != "" {
+			params = append(params, "alpn="+cleanShadowrocketValue(alpn))
+		}
+		if truthy(proxy["udp"]) {
+			params = append(params, "udp=1")
+		}
+		return joinShadowrocketLine(name, "anytls", server, port, params...), true
 	case "vless":
 		uuid := firstNonEmpty(valueAsString(proxy["uuid"]), valueAsString(proxy["password"]))
 		if uuid == "" {
