@@ -126,6 +126,16 @@ type HiddenSubscriptionResource struct {
 	CreatedAt    int64  `gorm:"autoCreateTime"`
 }
 
+type SubscriptionSource struct {
+	ID        uint   `gorm:"primarykey" json:"id"`
+	ProfileID uint   `gorm:"not null;default:0;index" json:"profile_id"`
+	URL       string `gorm:"type:text;not null" json:"url"`
+	IsPrimary bool   `gorm:"not null;default:false" json:"is_primary"`
+	SortOrder int    `gorm:"not null;default:0;index" json:"sort_order"`
+	CreatedAt int64  `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt int64  `gorm:"autoUpdateTime" json:"updated_at"`
+}
+
 type SubscriptionProfile struct {
 	ID           uint   `gorm:"primarykey" json:"id"`
 	Name         string `gorm:"uniqueIndex;not null" json:"name"`
@@ -250,6 +260,7 @@ func initDB() {
 		&CustomRule{},
 		&ProfileResourceOrder{},
 		&HiddenSubscriptionResource{},
+		&SubscriptionSource{},
 		&Subscription{},
 	)
 	if err != nil {
@@ -258,6 +269,9 @@ func initDB() {
 
 	if err := migrateLegacyProfileData(db); err != nil {
 		log.Fatalf("Failed to migrate legacy profile data: %v", err)
+	}
+	if err := migrateProfileSubscriptionSources(db); err != nil {
+		log.Fatalf("Failed to migrate profile subscription sources: %v", err)
 	}
 
 	DB = db
@@ -370,6 +384,61 @@ func assignLegacyResourcesToProfile(db *gorm.DB, profileID uint) error {
 	}
 	if err := db.Model(&CustomRule{}).Where("profile_id = 0").Update("profile_id", profileID).Error; err != nil {
 		return err
+	}
+	return nil
+}
+
+func migrateProfileSubscriptionSources(db *gorm.DB) error {
+	var profiles []SubscriptionProfile
+	if err := db.Find(&profiles).Error; err != nil {
+		return err
+	}
+
+	for _, profile := range profiles {
+		if normalizeProfileSourceType(profile.SourceType) != profileSourceRemote {
+			continue
+		}
+
+		var sources []SubscriptionSource
+		if err := db.Where("profile_id = ?", profile.ID).Order("sort_order asc, id asc").Find(&sources).Error; err != nil {
+			return err
+		}
+		if len(sources) == 0 {
+			if strings.TrimSpace(profile.URL) == "" {
+				continue
+			}
+			source := SubscriptionSource{
+				ProfileID: profile.ID,
+				URL:       strings.TrimSpace(profile.URL),
+				IsPrimary: true,
+				SortOrder: 0,
+			}
+			if err := db.Create(&source).Error; err != nil {
+				return err
+			}
+			continue
+		}
+
+		primaryIndex := -1
+		for idx, source := range sources {
+			if source.IsPrimary && primaryIndex == -1 {
+				primaryIndex = idx
+			}
+		}
+		if primaryIndex == -1 {
+			sources[0].IsPrimary = true
+			primaryIndex = 0
+			if err := db.Save(&sources[0]).Error; err != nil {
+				return err
+			}
+		}
+
+		primaryURL := strings.TrimSpace(sources[primaryIndex].URL)
+		if primaryURL != "" && strings.TrimSpace(profile.URL) != primaryURL {
+			if err := db.Model(&SubscriptionProfile{}).Where("id = ?", profile.ID).Update("url", primaryURL).Error; err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -516,4 +585,26 @@ func GetCustomRules(profileID uint) ([]CustomRule, error) {
 	var rules []CustomRule
 	err := DB.Where("profile_id = ?", profileID).Order("created_at asc, id asc").Find(&rules).Error
 	return rules, err
+}
+
+func GetProfileSubscriptionSources(profileID uint) ([]SubscriptionSource, error) {
+	var sources []SubscriptionSource
+	err := DB.Where("profile_id = ?", profileID).Order("sort_order asc, id asc").Find(&sources).Error
+	return sources, err
+}
+
+func ReplaceProfileSubscriptionSourcesTx(tx *gorm.DB, profileID uint, sources []SubscriptionSource) error {
+	if err := tx.Where("profile_id = ?", profileID).Delete(&SubscriptionSource{}).Error; err != nil {
+		return err
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+
+	for idx := range sources {
+		sources[idx].ID = 0
+		sources[idx].ProfileID = profileID
+		sources[idx].SortOrder = idx
+	}
+	return tx.Create(&sources).Error
 }

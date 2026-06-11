@@ -549,6 +549,91 @@ func TestFilterNewLocalizedRulesSkipsExistingManualRules(t *testing.T) {
 	}
 }
 
+func TestMergeSubscriptionPlainContentsKeepsPrimaryGroupsAndRules(t *testing.T) {
+	primary := `proxies:
+  - name: Proxy A
+    type: ss
+    server: primary.example.com
+    port: 8388
+    cipher: aes-128-gcm
+    password: primary-pass
+proxy-groups:
+  - name: Main
+    type: select
+    proxies:
+      - Proxy A
+      - DIRECT
+rules:
+  - DOMAIN-SUFFIX,primary.example,Main
+  - MATCH,Main
+`
+	secondary := `proxies:
+  - name: Proxy A
+    type: ss
+    server: secondary-a.example.com
+    port: 8388
+    cipher: aes-128-gcm
+    password: secondary-pass-a
+  - name: Proxy B
+    type: ss
+    server: secondary-b.example.com
+    port: 8388
+    cipher: aes-128-gcm
+    password: secondary-pass-b
+proxy-groups:
+  - name: Secondary
+    type: select
+    proxies:
+      - Proxy B
+rules:
+  - DOMAIN-SUFFIX,secondary.example,Secondary
+  - MATCH,Secondary
+`
+
+	got, err := mergeSubscriptionPlainContents(primary, []string{secondary})
+	if err != nil {
+		t.Fatalf("mergeSubscriptionPlainContents returned error: %v", err)
+	}
+
+	assertStringSliceEqual(t, yamlSequenceNames(t, got, "proxies"), []string{"Proxy A", "Proxy A 2", "Proxy B"})
+	assertStringSliceEqual(t, yamlSequenceNames(t, got, "proxy-groups"), []string{"Main"})
+	assertYAMLGroupProxiesEqual(t, got, "Main", []string{"Proxy A", "DIRECT", "Proxy A 2", "Proxy B"})
+	assertStringSliceEqual(t, yamlSequenceScalars(t, got, "rules"), []string{
+		"DOMAIN-SUFFIX,primary.example,Main",
+		"MATCH,Main",
+	})
+}
+
+func TestNormalizeProfileSourceRequestsRequiresSinglePrimary(t *testing.T) {
+	req := profileWriteRequest{
+		Name:       "multi",
+		SourceType: profileSourceRemote,
+		Sources: []profileSourceWriteRequest{
+			{URL: "https://primary.example.com/sub", IsPrimary: true},
+			{URL: "backup.example.com/sub"},
+		},
+	}
+
+	normalized, err := validateProfileWriteRequest(req)
+	if err != nil {
+		t.Fatalf("validateProfileWriteRequest returned error: %v", err)
+	}
+	if normalized.URL != "https://primary.example.com/sub" {
+		t.Fatalf("primary URL = %q, want primary source URL", normalized.URL)
+	}
+	if len(normalized.Sources) != 2 {
+		t.Fatalf("sources length = %d, want 2", len(normalized.Sources))
+	}
+	if normalized.Sources[1].URL != "https://backup.example.com/sub" {
+		t.Fatalf("second source URL = %q, want normalized https URL", normalized.Sources[1].URL)
+	}
+
+	req.Sources[1].IsPrimary = true
+	if _, err := validateProfileWriteRequest(req); err == nil {
+		t.Fatal("expected multiple primary sources to fail validation")
+	}
+}
+
 func TestDecodeSubscriptionPlainContentAcceptsBase64Yaml(t *testing.T) {
 	raw := base64.StdEncoding.EncodeToString([]byte("rules:\n  - MATCH,代理\n"))
 	got, err := decodeSubscriptionPlainContent(raw)

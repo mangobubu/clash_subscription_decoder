@@ -427,10 +427,16 @@ func handleChangePassword(c *gin.Context) {
 }
 
 type profileWriteRequest struct {
-	Name         string `json:"name" binding:"required"`
-	SourceType   string `json:"source_type" binding:"required"`
-	URL          string `json:"url"`
-	LocalContent string `json:"local_content"`
+	Name         string                      `json:"name" binding:"required"`
+	SourceType   string                      `json:"source_type" binding:"required"`
+	URL          string                      `json:"url"`
+	LocalContent string                      `json:"local_content"`
+	Sources      []profileSourceWriteRequest `json:"sources"`
+}
+
+type profileSourceWriteRequest struct {
+	URL       string `json:"url"`
+	IsPrimary bool   `json:"is_primary"`
 }
 
 type copyProfileRulesRequest struct {
@@ -525,16 +531,65 @@ func profileListItem(profile SubscriptionProfile) gin.H {
 	if normalizeProfileSourceType(profile.SourceType) == profileSourceLocal {
 		localContent = ""
 	}
-	return gin.H{
-		"id":            profile.ID,
-		"name":          profile.Name,
-		"source_type":   profile.SourceType,
-		"url":           profile.URL,
-		"local_content": localContent,
-		"has_token":     profile.SubToken != "",
-		"created_at":    profile.CreatedAt,
-		"updated_at":    profile.UpdatedAt,
+	sources := profileSubscriptionSourceList(profile)
+	sourceItems := make([]gin.H, 0, len(sources))
+	for _, source := range sources {
+		sourceItems = append(sourceItems, gin.H{
+			"id":         source.ID,
+			"url":        source.URL,
+			"is_primary": source.IsPrimary,
+			"sort_order": source.SortOrder,
+		})
 	}
+	return gin.H{
+		"id":                 profile.ID,
+		"name":               profile.Name,
+		"source_type":        profile.SourceType,
+		"url":                profile.URL,
+		"local_content":      localContent,
+		"has_token":          profile.SubToken != "",
+		"sources":            sourceItems,
+		"subscription_count": len(sourceItems),
+		"created_at":         profile.CreatedAt,
+		"updated_at":         profile.UpdatedAt,
+	}
+}
+
+func profileSubscriptionSourceList(profile SubscriptionProfile) []SubscriptionSource {
+	if normalizeProfileSourceType(profile.SourceType) != profileSourceRemote {
+		return nil
+	}
+	if DB != nil && profile.ID > 0 {
+		if sources, err := GetProfileSubscriptionSources(profile.ID); err == nil && len(sources) > 0 {
+			return ensureSinglePrimarySubscriptionSource(sources)
+		}
+	}
+	if url := strings.TrimSpace(profile.URL); url != "" {
+		return []SubscriptionSource{{
+			ProfileID: profile.ID,
+			URL:       url,
+			IsPrimary: true,
+			SortOrder: 0,
+		}}
+	}
+	return nil
+}
+
+func ensureSinglePrimarySubscriptionSource(sources []SubscriptionSource) []SubscriptionSource {
+	primaryIndex := -1
+	for idx := range sources {
+		if sources[idx].IsPrimary && primaryIndex == -1 {
+			primaryIndex = idx
+			continue
+		}
+		if sources[idx].IsPrimary {
+			sources[idx].IsPrimary = false
+		}
+	}
+	if primaryIndex == -1 && len(sources) > 0 {
+		sources[0].IsPrimary = true
+	}
+	return sources
 }
 
 func validateProfileWriteRequest(req profileWriteRequest) (profileWriteRequest, error) {
@@ -545,20 +600,80 @@ func validateProfileWriteRequest(req profileWriteRequest) (profileWriteRequest, 
 		return req, fmt.Errorf("配置名称不能为空")
 	}
 	if req.SourceType == profileSourceRemote {
-		targetURL, err := normalizeSubscriptionURL(req.URL)
+		sources, primaryURL, err := normalizeProfileSourceRequests(req)
 		if err != nil {
 			return req, err
 		}
-		req.URL = targetURL
+		req.Sources = sources
+		req.URL = primaryURL
 		req.LocalContent = ""
 		return req, nil
 	}
 	req.URL = ""
 	req.LocalContent = ""
+	req.Sources = nil
 	return req, nil
 }
 
+func normalizeProfileSourceRequests(req profileWriteRequest) ([]profileSourceWriteRequest, string, error) {
+	inputSources := req.Sources
+	if len(inputSources) == 0 && strings.TrimSpace(req.URL) != "" {
+		inputSources = []profileSourceWriteRequest{{URL: req.URL, IsPrimary: true}}
+	}
+	if len(inputSources) == 0 {
+		return nil, "", fmt.Errorf("请输入远程订阅地址")
+	}
+
+	seenURLs := make(map[string]bool, len(inputSources))
+	sources := make([]profileSourceWriteRequest, 0, len(inputSources))
+	primaryIndex := -1
+	for _, source := range inputSources {
+		normalizedURL, err := normalizeSubscriptionURL(source.URL)
+		if err != nil {
+			return nil, "", err
+		}
+		if seenURLs[normalizedURL] {
+			return nil, "", fmt.Errorf("订阅地址重复: %s", normalizedURL)
+		}
+		seenURLs[normalizedURL] = true
+		source.URL = normalizedURL
+		if source.IsPrimary {
+			if primaryIndex != -1 {
+				return nil, "", fmt.Errorf("只能设置一个主订阅")
+			}
+			primaryIndex = len(sources)
+		}
+		sources = append(sources, source)
+	}
+	if primaryIndex == -1 {
+		primaryIndex = 0
+		sources[0].IsPrimary = true
+	}
+	for idx := range sources {
+		sources[idx].IsPrimary = idx == primaryIndex
+	}
+	return sources, sources[primaryIndex].URL, nil
+}
+
+func subscriptionSourcesFromWriteRequests(reqSources []profileSourceWriteRequest) []SubscriptionSource {
+	sources := make([]SubscriptionSource, 0, len(reqSources))
+	for idx, reqSource := range reqSources {
+		sources = append(sources, SubscriptionSource{
+			URL:       reqSource.URL,
+			IsPrimary: reqSource.IsPrimary,
+			SortOrder: idx,
+		})
+	}
+	return sources
+}
+
 type profileContentFetcher func(string) (string, error)
+
+type subscriptionSourceContent struct {
+	Source SubscriptionSource
+	Raw    string
+	Plain  string
+}
 
 func loadProfileRawContent(profile SubscriptionProfile, fetcher profileContentFetcher) (string, bool, error) {
 	if normalizeProfileSourceType(profile.SourceType) == profileSourceLocal {
@@ -571,6 +686,207 @@ func loadProfileRawContent(profile SubscriptionProfile, fetcher profileContentFe
 	}
 	rawResponse, err := fetcher(targetURL)
 	return rawResponse, true, err
+}
+
+func loadProfileSourceContents(profile SubscriptionProfile, fetcher profileContentFetcher) ([]subscriptionSourceContent, error) {
+	if normalizeProfileSourceType(profile.SourceType) == profileSourceLocal {
+		return nil, fmt.Errorf("本地手动配置不读取远程订阅源")
+	}
+
+	sources := primaryFirstSubscriptionSources(profileSubscriptionSourceList(profile))
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("订阅地址为空")
+	}
+
+	contents := make([]subscriptionSourceContent, 0, len(sources))
+	for _, source := range sources {
+		targetURL := strings.TrimSpace(source.URL)
+		if targetURL == "" {
+			return nil, fmt.Errorf("订阅地址为空")
+		}
+
+		rawResponse, err := fetcher(targetURL)
+		if err != nil {
+			return nil, fmt.Errorf("抓取订阅源失败 [%s]: %w", targetURL, err)
+		}
+		plainContent, err := decodeSubscriptionPlainContent(rawResponse)
+		if err != nil {
+			return nil, fmt.Errorf("解析订阅源失败 [%s]: %w", targetURL, err)
+		}
+		contents = append(contents, subscriptionSourceContent{
+			Source: source,
+			Raw:    rawResponse,
+			Plain:  plainContent,
+		})
+	}
+	return contents, nil
+}
+
+func primaryFirstSubscriptionSources(sources []SubscriptionSource) []SubscriptionSource {
+	if len(sources) <= 1 {
+		return sources
+	}
+	sources = ensureSinglePrimarySubscriptionSource(sources)
+	ordered := make([]SubscriptionSource, 0, len(sources))
+	primaryIndex := -1
+	for idx, source := range sources {
+		if source.IsPrimary {
+			ordered = append(ordered, source)
+			primaryIndex = idx
+			break
+		}
+	}
+	for idx, source := range sources {
+		if idx != primaryIndex {
+			ordered = append(ordered, source)
+		}
+	}
+	return ordered
+}
+
+func mergeSubscriptionPlainContents(primaryContent string, secondaryContents []string) (string, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(primaryContent), &root); err != nil {
+		return "", fmt.Errorf("解析主订阅 YAML 失败: %w", err)
+	}
+	if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("主订阅 YAML 格式无效")
+	}
+
+	docNode := root.Content[0]
+	proxiesNode, err := ensureTopLevelYAMLSequence(docNode, "proxies")
+	if err != nil {
+		return "", err
+	}
+	usedNames := yamlSequenceNameSet(proxiesNode)
+	mergedProxyNames := make([]string, 0)
+
+	for _, secondaryContent := range secondaryContents {
+		proxyNodes, proxyNames, err := copyUniqueProxyNodesFromYAML(secondaryContent, usedNames)
+		if err != nil {
+			return "", err
+		}
+		proxiesNode.Content = append(proxiesNode.Content, proxyNodes...)
+		mergedProxyNames = append(mergedProxyNames, proxyNames...)
+	}
+
+	appendProxyNamesToExistingGroups(docNode, mergedProxyNames)
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		return "", fmt.Errorf("生成合并订阅 YAML 失败: %w", err)
+	}
+	return string(out), nil
+}
+
+func copyUniqueProxyNodesFromYAML(content string, usedNames map[string]bool) ([]*yaml.Node, []string, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(content), &root); err != nil {
+		return nil, nil, fmt.Errorf("解析非主订阅 YAML 失败: %w", err)
+	}
+	if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return nil, nil, fmt.Errorf("非主订阅 YAML 格式无效")
+	}
+
+	proxiesNode := findTopLevelSequenceNode(root.Content[0], "proxies")
+	if proxiesNode == nil {
+		return nil, nil, nil
+	}
+
+	proxyNodes := make([]*yaml.Node, 0, len(proxiesNode.Content))
+	proxyNames := make([]string, 0, len(proxiesNode.Content))
+	for _, proxyNode := range proxiesNode.Content {
+		if proxyNode.Kind != yaml.MappingNode {
+			continue
+		}
+		copiedNode := cloneYAMLNode(proxyNode)
+		name := yamlMappingName(copiedNode)
+		if name == "" {
+			continue
+		}
+		uniqueName := uniqueMergedProxyName(name, usedNames)
+		setYAMLMappingScalar(copiedNode, "name", uniqueName)
+		proxyNodes = append(proxyNodes, copiedNode)
+		proxyNames = append(proxyNames, uniqueName)
+	}
+	return proxyNodes, proxyNames, nil
+}
+
+func uniqueMergedProxyName(name string, usedNames map[string]bool) string {
+	baseName := strings.TrimSpace(name)
+	if baseName == "" {
+		baseName = "Proxy"
+	}
+	if !usedNames[baseName] {
+		usedNames[baseName] = true
+		return baseName
+	}
+	for idx := 2; ; idx++ {
+		candidate := fmt.Sprintf("%s %d", baseName, idx)
+		if !usedNames[candidate] {
+			usedNames[candidate] = true
+			return candidate
+		}
+	}
+}
+
+func appendProxyNamesToExistingGroups(docNode *yaml.Node, proxyNames []string) {
+	if len(proxyNames) == 0 {
+		return
+	}
+	groupsNode := findTopLevelSequenceNode(docNode, "proxy-groups")
+	if groupsNode == nil {
+		return
+	}
+	for _, groupNode := range groupsNode.Content {
+		if groupNode.Kind != yaml.MappingNode {
+			continue
+		}
+		proxiesSeq := yamlMappingValueNodeByKey(groupNode, "proxies")
+		if proxiesSeq == nil || proxiesSeq.Kind != yaml.SequenceNode {
+			continue
+		}
+		existing := make(map[string]bool, len(proxiesSeq.Content)+len(proxyNames))
+		for _, item := range proxiesSeq.Content {
+			existing[strings.TrimSpace(item.Value)] = true
+		}
+		for _, name := range proxyNames {
+			if name == "" || existing[name] {
+				continue
+			}
+			proxiesSeq.Content = append(proxiesSeq.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: name})
+			existing[name] = true
+		}
+	}
+}
+
+func cloneYAMLNode(node *yaml.Node) *yaml.Node {
+	if node == nil {
+		return nil
+	}
+	copied := *node
+	if len(node.Content) > 0 {
+		copied.Content = make([]*yaml.Node, 0, len(node.Content))
+		for _, child := range node.Content {
+			copied.Content = append(copied.Content, cloneYAMLNode(child))
+		}
+	}
+	return &copied
+}
+
+func setYAMLMappingScalar(node *yaml.Node, key string, value string) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i < len(node.Content)-1; i += 2 {
+		if node.Content[i].Value == key {
+			node.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Value: value}
+			return
+		}
+	}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: value},
+	)
 }
 
 func looksLikePlainSubscriptionConfig(content string) bool {
@@ -865,16 +1181,32 @@ func refreshProfileCache(profile *SubscriptionProfile) error {
 		return DB.Save(profile).Error
 	}
 
-	rawContent, _, err := loadProfileRawContent(*profile, fetchURLContent)
+	sourceContents, err := loadProfileSourceContents(*profile, fetchURLContent)
 	if err != nil {
 		return err
 	}
 
-	decodedContent, err := ProcessSubscriptionRawData(rawContent, profile.ID)
+	baseContent := sourceContents[0].Plain
+	rawContent := sourceContents[0].Raw
+	if len(sourceContents) > 1 {
+		secondaryContents := make([]string, 0, len(sourceContents)-1)
+		for _, content := range sourceContents[1:] {
+			secondaryContents = append(secondaryContents, content.Plain)
+		}
+		mergedContent, err := mergeSubscriptionPlainContents(baseContent, secondaryContents)
+		if err != nil {
+			return err
+		}
+		baseContent = mergedContent
+		rawContent = mergedContent
+	}
+
+	decodedContent, err := ProcessSubscriptionRawData(baseContent, profile.ID)
 	if err != nil {
 		return err
 	}
 
+	profile.URL = sourceContents[0].Source.URL
 	profile.RawResponse = rawContent
 	profile.Decoded = decodedContent
 	return DB.Save(profile).Error
@@ -918,7 +1250,15 @@ func handleCreateProfile(c *gin.Context) {
 		URL:          normalizedReq.URL,
 		LocalContent: normalizedReq.LocalContent,
 	}
-	if err := DB.Create(&profile).Error; err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&profile).Error; err != nil {
+			return err
+		}
+		if profile.SourceType == profileSourceRemote {
+			return ReplaceProfileSubscriptionSourcesTx(tx, profile.ID, subscriptionSourcesFromWriteRequests(normalizedReq.Sources))
+		}
+		return nil
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建配置失败", "error": err.Error()})
 		return
 	}
@@ -948,12 +1288,19 @@ func handleUpdateProfile(c *gin.Context) {
 	profile.SourceType = normalizedReq.SourceType
 	profile.URL = normalizedReq.URL
 	profile.LocalContent = normalizedReq.LocalContent
-	if profile.SourceType == profileSourceRemote {
-		profile.RawResponse = ""
-		profile.Decoded = ""
-	}
+	profile.RawResponse = ""
+	profile.Decoded = ""
 
-	if err := DB.Save(&profile).Error; err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&profile).Error; err != nil {
+			return err
+		}
+		sources := []SubscriptionSource{}
+		if profile.SourceType == profileSourceRemote {
+			sources = subscriptionSourcesFromWriteRequests(normalizedReq.Sources)
+		}
+		return ReplaceProfileSubscriptionSourcesTx(tx, profile.ID, sources)
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新配置失败", "error": err.Error()})
 		return
 	}
@@ -988,6 +1335,9 @@ func handleDeleteProfile(c *gin.Context) {
 			return err
 		}
 		if err := tx.Where("profile_id = ?", profile.ID).Delete(&HiddenSubscriptionResource{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("profile_id = ?", profile.ID).Delete(&SubscriptionSource{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&profile).Error
@@ -1584,6 +1934,7 @@ func handleLocalizeProfileRules(c *gin.Context) {
 
 type BackupData struct {
 	Profiles        []SubscriptionProfile        `json:"profiles"`
+	Sources         []SubscriptionSource         `json:"sources"`
 	Groups          []CustomProxyGroup           `json:"groups"`
 	Nodes           []CustomNode                 `json:"nodes"`
 	Rules           []CustomRule                 `json:"rules"`
@@ -1594,6 +1945,10 @@ func handleBackup(c *gin.Context) {
 	var data BackupData
 	if err := DB.Find(&data.Profiles).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取配置失败"})
+		return
+	}
+	if err := DB.Find(&data.Sources).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取订阅源失败"})
 		return
 	}
 	if err := DB.Find(&data.Groups).Error; err != nil {
@@ -1641,6 +1996,9 @@ func handleImport(c *gin.Context) {
 			return err
 		}
 		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&HiddenSubscriptionResource{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&SubscriptionSource{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&SubscriptionProfile{}).Error; err != nil {
@@ -1716,6 +2074,66 @@ func handleImport(c *gin.Context) {
 			data.HiddenResources[i].Name = strings.TrimSpace(data.HiddenResources[i].Name)
 		}
 
+		if len(data.Sources) == 0 {
+			for _, profile := range data.Profiles {
+				if normalizeProfileSourceType(profile.SourceType) != profileSourceRemote || strings.TrimSpace(profile.URL) == "" {
+					continue
+				}
+				data.Sources = append(data.Sources, SubscriptionSource{
+					ProfileID: profile.ID,
+					URL:       profile.URL,
+					IsPrimary: true,
+					SortOrder: 0,
+				})
+			}
+		}
+		sourceOrderByProfile := map[uint]int{}
+		firstSourceIndexByProfile := map[uint]int{}
+		hasPrimaryByProfile := map[uint]bool{}
+		for i := range data.Sources {
+			data.Sources[i].ID = 0
+			if mappedProfileID, ok := profileIDMap[data.Sources[i].ProfileID]; ok && mappedProfileID > 0 {
+				data.Sources[i].ProfileID = mappedProfileID
+			}
+			if data.Sources[i].ProfileID == 0 {
+				data.Sources[i].ProfileID = defaultProfileID
+			}
+			normalizedURL, err := normalizeSubscriptionURL(data.Sources[i].URL)
+			if err != nil {
+				return err
+			}
+			data.Sources[i].URL = normalizedURL
+			data.Sources[i].SortOrder = sourceOrderByProfile[data.Sources[i].ProfileID]
+			sourceOrderByProfile[data.Sources[i].ProfileID]++
+			if _, exists := firstSourceIndexByProfile[data.Sources[i].ProfileID]; !exists {
+				firstSourceIndexByProfile[data.Sources[i].ProfileID] = i
+			}
+			if data.Sources[i].IsPrimary {
+				if hasPrimaryByProfile[data.Sources[i].ProfileID] {
+					data.Sources[i].IsPrimary = false
+				} else {
+					hasPrimaryByProfile[data.Sources[i].ProfileID] = true
+				}
+			}
+		}
+		for profileID, firstIndex := range firstSourceIndexByProfile {
+			if !hasPrimaryByProfile[profileID] {
+				data.Sources[firstIndex].IsPrimary = true
+			}
+		}
+		if len(data.Sources) > 0 {
+			if err := tx.Create(&data.Sources).Error; err != nil {
+				return err
+			}
+			for _, source := range data.Sources {
+				if source.IsPrimary {
+					if err := tx.Model(&SubscriptionProfile{}).Where("id = ?", source.ProfileID).Update("url", source.URL).Error; err != nil {
+						return err
+					}
+				}
+			}
+		}
+
 		if len(data.Groups) > 0 {
 			if err := tx.Create(&data.Groups).Error; err != nil {
 				return err
@@ -1783,6 +2201,21 @@ func handleDecode(c *gin.Context) {
 	profile.SourceType = profileSourceRemote
 	profile.URL = targetURL
 	profile.LocalContent = ""
+	profile.RawResponse = ""
+	profile.Decoded = ""
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&profile).Error; err != nil {
+			return err
+		}
+		return ReplaceProfileSubscriptionSourcesTx(tx, profile.ID, []SubscriptionSource{{
+			URL:       targetURL,
+			IsPrimary: true,
+			SortOrder: 0,
+		}})
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存订阅配置失败", "error": err.Error()})
+		return
+	}
 	if err := refreshProfileCache(&profile); err != nil {
 		statusCode := http.StatusBadGateway
 		if strings.Contains(err.Error(), "格式不支持") {
@@ -3158,6 +3591,39 @@ func findTopLevelSequenceNode(docNode *yaml.Node, key string) *yaml.Node {
 	for i := 0; i < len(docNode.Content)-1; i += 2 {
 		if docNode.Content[i].Value == key && docNode.Content[i+1].Kind == yaml.SequenceNode {
 			return docNode.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func ensureTopLevelYAMLSequence(docNode *yaml.Node, key string) (*yaml.Node, error) {
+	if docNode == nil || docNode.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("YAML 文档不是对象结构")
+	}
+	for i := 0; i < len(docNode.Content)-1; i += 2 {
+		if docNode.Content[i].Value != key {
+			continue
+		}
+		if docNode.Content[i+1].Kind != yaml.SequenceNode {
+			return nil, fmt.Errorf("YAML 字段 %s 不是列表结构", key)
+		}
+		return docNode.Content[i+1], nil
+	}
+	seq := &yaml.Node{Kind: yaml.SequenceNode}
+	docNode.Content = append(docNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+		seq,
+	)
+	return seq, nil
+}
+
+func yamlMappingValueNodeByKey(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i < len(node.Content)-1; i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
 		}
 	}
 	return nil

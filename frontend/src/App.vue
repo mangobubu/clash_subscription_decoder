@@ -73,9 +73,23 @@ interface SubscriptionProfile {
   source_type: "remote" | "local";
   url: string;
   local_content: string;
+  sources?: SubscriptionSource[];
+  subscription_count?: number;
   has_token: boolean;
   created_at: number;
   updated_at: number;
+}
+
+interface SubscriptionSource {
+  id?: number;
+  url: string;
+  is_primary: boolean;
+  sort_order?: number;
+}
+
+interface ProfileSourceForm {
+  url: string;
+  is_primary: boolean;
 }
 
 const profiles = ref<SubscriptionProfile[]>([]);
@@ -88,11 +102,51 @@ const profileForm = ref({
   name: "",
   source_type: "remote" as "remote" | "local",
   url: "",
+  sources: [{ url: "", is_primary: true }] as ProfileSourceForm[],
 });
 
 const currentProfile = computed(() =>
   profiles.value.find((profile) => profile.id === activeProfileId.value) || null,
 );
+
+const createEmptyProfileSource = (isPrimary = false): ProfileSourceForm => ({
+  url: "",
+  is_primary: isPrimary,
+});
+
+const normalizeProfileSourcesForForm = (
+  sources: SubscriptionSource[] | undefined,
+  fallbackUrl = "",
+): ProfileSourceForm[] => {
+  const rawSources =
+    sources && sources.length > 0
+      ? sources
+      : fallbackUrl
+        ? [{ url: fallbackUrl, is_primary: true }]
+        : [{ url: "", is_primary: true }];
+  const hasPrimary = rawSources.some((source) => source.is_primary);
+  const normalized = rawSources.map((source, index) => ({
+    url: source.url || "",
+    is_primary: Boolean(source.is_primary) || (!hasPrimary && index === 0),
+  }));
+  const primaryIndex = normalized.findIndex((source) => source.is_primary);
+  normalized.forEach((source, index) => {
+    source.is_primary = index === (primaryIndex >= 0 ? primaryIndex : 0);
+  });
+  return normalized;
+};
+
+const primaryProfileUrl = (profile: SubscriptionProfile | null) => {
+  if (!profile) return "";
+  return profile.sources?.find((source) => source.is_primary)?.url || profile.url || "";
+};
+
+const profileSubscriptionCount = (profile: SubscriptionProfile | null) => {
+  if (!profile || profile.source_type !== "remote") return 0;
+  return Math.max(profile.subscription_count || 0, profile.sources?.length || 0, profile.url ? 1 : 0);
+};
+
+const isMultiSubscriptionProfile = computed(() => profileSubscriptionCount(currentProfile.value) > 1);
 
 const currentProfileName = computed(() => currentProfile.value?.name || "当前配置");
 const profileScopedUrl = (path: string) => {
@@ -247,7 +301,7 @@ const loadProfiles = async (preferredProfileId?: number) => {
       activeProfileId.value = nextProfile?.id || null;
       if (activeProfileId.value) {
         localStorage.setItem("active_profile_id", String(activeProfileId.value));
-        inputUrl.value = nextProfile?.url || "";
+        inputUrl.value = primaryProfileUrl(nextProfile);
       }
     }
   } catch (err: any) {
@@ -298,7 +352,7 @@ const loadSubscription = async (options: LoadSubscriptionOptions = {}) => {
   } catch (e: any) {
     result.value = null;
     hasSubscription.value = false;
-    inputUrl.value = currentProfile.value?.url || "";
+    inputUrl.value = primaryProfileUrl(currentProfile.value);
   }
 };
 
@@ -306,7 +360,7 @@ const selectProfile = async (profile: SubscriptionProfile) => {
   if (activeProfileId.value === profile.id) return;
   activeProfileId.value = profile.id;
   localStorage.setItem("active_profile_id", String(profile.id));
-  inputUrl.value = profile.url || "";
+  inputUrl.value = primaryProfileUrl(profile);
   errorMsg.value = "";
   dirtyRulesMap.value = {};
   await fetchCustomData();
@@ -319,6 +373,7 @@ const openCreateProfileDialog = () => {
     name: "",
     source_type: "remote",
     url: "",
+    sources: [createEmptyProfileSource(true)],
   };
   profileDialogVisible.value = true;
 };
@@ -328,9 +383,32 @@ const openEditProfileDialog = (profile: SubscriptionProfile) => {
   profileForm.value = {
     name: profile.name,
     source_type: profile.source_type,
-    url: profile.url || "",
+    url: primaryProfileUrl(profile),
+    sources: normalizeProfileSourcesForForm(profile.sources, profile.url),
   };
   profileDialogVisible.value = true;
+};
+
+const addProfileSource = () => {
+  profileForm.value.sources.push(createEmptyProfileSource(false));
+};
+
+const setPrimaryProfileSource = (index: number) => {
+  profileForm.value.sources.forEach((source, sourceIndex) => {
+    source.is_primary = sourceIndex === index;
+  });
+};
+
+const removeProfileSource = (index: number) => {
+  if (profileForm.value.sources.length <= 1) {
+    ElMessage.warning("至少保留一个订阅地址");
+    return;
+  }
+  const removedPrimary = profileForm.value.sources[index]?.is_primary;
+  profileForm.value.sources.splice(index, 1);
+  if (removedPrimary && profileForm.value.sources.length > 0) {
+    setPrimaryProfileSource(0);
+  }
 };
 
 const saveProfile = async () => {
@@ -338,13 +416,29 @@ const saveProfile = async () => {
     ElMessage.warning("请输入配置名称");
     return;
   }
-  if (profileForm.value.source_type === "remote" && !profileForm.value.url.trim()) {
-    ElMessage.warning("请输入远程订阅地址");
-    return;
+  const remoteSources = profileForm.value.sources.map((source) => ({
+    url: source.url.trim(),
+    is_primary: source.is_primary,
+  }));
+  if (profileForm.value.source_type === "remote") {
+    if (remoteSources.some((source) => !source.url)) {
+      ElMessage.warning("请补全所有远程订阅地址");
+      return;
+    }
+    if (remoteSources.filter((source) => source.is_primary).length !== 1) {
+      ElMessage.warning("请选择一个主订阅");
+      return;
+    }
   }
   isSubmittingProfile.value = true;
   try {
-    const payload = { ...profileForm.value, local_content: "" };
+    const primarySource = remoteSources.find((source) => source.is_primary);
+    const payload = {
+      ...profileForm.value,
+      url: profileForm.value.source_type === "remote" ? primarySource?.url || "" : "",
+      sources: profileForm.value.source_type === "remote" ? remoteSources : [],
+      local_content: "",
+    };
     const res = editingProfileId.value
       ? await axios.put(buildBackendUrl(`/api/profiles/${editingProfileId.value}`), payload)
       : await axios.post(buildBackendUrl("/api/profiles"), payload);
@@ -524,6 +618,10 @@ const handleQuickMock = () => {
     ElMessage.warning("本地手动配置不需要订阅地址，请添加节点后刷新");
     return;
   }
+  if (isMultiSubscriptionProfile.value) {
+    ElMessage.warning("多订阅配置请在配置编辑中维护订阅地址");
+    return;
+  }
   inputUrl.value = "mock.clash.local/sub";
   handleDecode();
 };
@@ -542,6 +640,10 @@ const handleDecode = async () => {
     return;
   }
   if (currentProfile.value?.source_type === "local") {
+    await refreshCurrentProfile();
+    return;
+  }
+  if (isMultiSubscriptionProfile.value) {
     await refreshCurrentProfile();
     return;
   }
@@ -2247,12 +2349,27 @@ const submitChangePassword = async () => {
 	          >
 	            <div class="profile-card-main">
 	              <span class="profile-name">{{ profile.name }}</span>
-	              <el-tag size="small" :type="profile.source_type === 'local' ? 'success' : 'primary'">
-	                {{ profile.source_type === 'local' ? '本地手动' : '远程订阅' }}
+	              <el-tag
+	                size="small"
+	                :type="profile.source_type === 'local' ? 'success' : profileSubscriptionCount(profile) > 1 ? 'warning' : 'primary'"
+	              >
+	                {{
+	                  profile.source_type === 'local'
+	                    ? '本地手动'
+	                    : profileSubscriptionCount(profile) > 1
+	                      ? `多订阅 ${profileSubscriptionCount(profile)}`
+	                      : '远程订阅'
+	                }}
 	              </el-tag>
 	            </div>
 	            <div class="profile-meta">
-	              {{ profile.source_type === 'local' ? '不依赖订阅地址' : profile.url }}
+	              {{
+	                profile.source_type === 'local'
+	                  ? '不依赖订阅地址'
+	                  : profileSubscriptionCount(profile) > 1
+	                    ? `主订阅：${primaryProfileUrl(profile)}`
+	                    : primaryProfileUrl(profile)
+	              }}
 	            </div>
 	            <div class="profile-actions" @click.stop>
 	              <IconTooltipButton
@@ -2299,7 +2416,7 @@ const submitChangePassword = async () => {
 	            clearable
 	            @clear="handleClear"
 	            @keyup.enter="handleDecode"
-	            :disabled="isLoading || currentProfile?.source_type === 'local'"
+	            :disabled="isLoading || currentProfile?.source_type === 'local' || isMultiSubscriptionProfile"
 	            class="decode-input"
 	          >
             <template #prefix>
@@ -2329,7 +2446,7 @@ const submitChangePassword = async () => {
 	              type="info"
 	              plain
 	              :icon="Link"
-	              :disabled="isLoading || currentProfile?.source_type === 'local'"
+	              :disabled="isLoading || currentProfile?.source_type === 'local' || isMultiSubscriptionProfile"
 	              @click="handleQuickMock"
 	            />
           </div>
@@ -3005,11 +3122,41 @@ const submitChangePassword = async () => {
 	          />
 	        </el-form-item>
 	        <el-form-item v-if="profileForm.source_type === 'remote'" label="远程订阅地址">
-	          <el-input
-	            v-model="profileForm.url"
-	            placeholder="https://example.com/sub"
-	            clearable
-	          />
+	          <div class="profile-source-list">
+	            <div
+	              v-for="(source, index) in profileForm.sources"
+	              :key="index"
+	              class="profile-source-row"
+	            >
+	              <el-input
+	                v-model="source.url"
+	                :placeholder="index === 0 ? 'https://example.com/sub' : 'https://example.com/backup-sub'"
+	                clearable
+	              />
+	              <el-button
+	                class="source-primary-btn"
+	                :type="source.is_primary ? 'success' : 'primary'"
+	                :plain="!source.is_primary"
+	                @click="setPrimaryProfileSource(index)"
+	              >
+	                {{ source.is_primary ? '主订阅' : '设为主订阅' }}
+	              </el-button>
+	              <IconTooltipButton
+	                label="删除订阅地址"
+	                type="danger"
+	                plain
+	                :disabled="profileForm.sources.length <= 1"
+	                :icon="Delete"
+	                @click="removeProfileSource(index)"
+	              />
+	            </div>
+	            <div class="profile-source-footer">
+	              <el-button type="primary" plain :icon="Plus" @click="addProfileSource">
+	                添加订阅地址
+	              </el-button>
+	              <span class="profile-source-tip">主订阅用于保留代理组和规则，其他订阅只合并节点。</span>
+	            </div>
+	          </div>
 	        </el-form-item>
 	        <el-form-item v-else label="本地手动配置说明">
 	          <el-alert
@@ -3839,6 +3986,38 @@ const submitChangePassword = async () => {
   margin-top: 8px;
 }
 
+.profile-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.profile-source-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.source-primary-btn {
+  min-width: 104px;
+}
+
+.profile-source-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.profile-source-tip {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .section-title {
   margin: 0 0 10px 0;
   font-size: 22px;
@@ -4034,6 +4213,19 @@ const submitChangePassword = async () => {
 
   .result-action-group :deep(.el-button:nth-child(n + 3)) {
     border-top: 1px solid rgba(148, 163, 184, 0.14) !important;
+  }
+
+  .profile-source-row {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-source-row :deep(.el-button),
+  .profile-source-footer :deep(.el-button) {
+    width: 100%;
+  }
+
+  .profile-source-footer {
+    align-items: stretch;
   }
 }
 
