@@ -604,6 +604,48 @@ rules:
 	})
 }
 
+func TestDecodeSubscriptionPlainContentPreservesMergedYAMLStructure(t *testing.T) {
+	primary := `proxies:
+  - name: Proxy A
+    type: ss
+    server: primary.example.com
+    port: 8388
+    cipher: aes-128-gcm
+    password: primary-pass
+proxy-groups:
+  - name: Main
+    type: select
+    proxies:
+      - Proxy A
+      - DIRECT
+rules:
+  - MATCH,Main
+`
+	secondary := `proxies:
+  - name: Proxy B
+    type: ss
+    server: secondary.example.com
+    port: 8388
+    cipher: aes-128-gcm
+    password: secondary-pass
+`
+
+	merged, err := mergeSubscriptionPlainContents(primary, []string{secondary})
+	if err != nil {
+		t.Fatalf("mergeSubscriptionPlainContents returned error: %v", err)
+	}
+
+	got, err := decodeSubscriptionPlainContent(merged)
+	if err != nil {
+		t.Fatalf("decodeSubscriptionPlainContent returned error: %v", err)
+	}
+
+	assertStringSliceEqual(t, yamlSequenceNames(t, got, "proxies"), []string{"Proxy A", "Proxy B"})
+	assertStringSliceEqual(t, yamlSequenceNames(t, got, "proxy-groups"), []string{"Main"})
+	assertYAMLGroupProxiesEqual(t, got, "Main", []string{"Proxy A", "DIRECT", "Proxy B"})
+	assertStringSliceEqual(t, yamlSequenceScalars(t, got, "rules"), []string{"MATCH,Main"})
+}
+
 func TestNormalizeProfileSourceRequestsRequiresSinglePrimary(t *testing.T) {
 	req := profileWriteRequest{
 		Name:       "multi",

@@ -4225,7 +4225,7 @@ func decodeSubscriptionPlainContent(rawResponse string) (string, error) {
 	}
 
 	if looksLikePlainSubscriptionConfig(decodedContent) {
-		return unescapeSubscriptionLines(decodedContent), nil
+		return normalizePlainSubscriptionConfig(decodedContent), nil
 	}
 
 	if convertedContent, convertErr := convertProxyURIListToClashYAML(decodedContent); convertErr == nil {
@@ -4241,6 +4241,11 @@ func decodeSubscriptionPlainContent(rawResponse string) (string, error) {
 		return "", fmt.Errorf("解析失败，且不包含常见配置文件特征，目标地址返回的内容格式不支持: %v", err)
 	}
 	return "", fmt.Errorf("解析失败，目标地址返回的内容既不是 Clash YAML，也不是可识别的节点 URI 列表")
+}
+
+func normalizePlainSubscriptionConfig(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	return strings.ReplaceAll(content, "\r", "\n")
 }
 
 func unescapeSubscriptionLines(content string) string {
