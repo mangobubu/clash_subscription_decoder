@@ -92,6 +92,27 @@ interface ProfileSourceForm {
   is_primary: boolean;
 }
 
+type ProviderKind = "proxy" | "rule";
+
+interface ProviderDisplayItem {
+  kind: ProviderKind;
+  name: string;
+  type: string;
+  url: string;
+  path: string;
+  behavior: string;
+  format: string;
+  interval: string;
+  usageCount: number;
+  config: Record<string, any>;
+}
+
+interface ParseDiagnostic {
+  type: "success" | "info" | "warning" | "error";
+  title: string;
+  description: string;
+}
+
 const profiles = ref<SubscriptionProfile[]>([]);
 const activeProfileId = ref<number | null>(null);
 const isProfilesLoading = ref(false);
@@ -139,6 +160,17 @@ const normalizeProfileSourcesForForm = (
 const primaryProfileUrl = (profile: SubscriptionProfile | null) => {
   if (!profile) return "";
   return profile.sources?.find((source) => source.is_primary)?.url || profile.url || "";
+};
+
+const profileDisplaySources = (profile: SubscriptionProfile | null) => {
+  if (!profile || profile.source_type !== "remote") return [];
+  const rawSources =
+    profile.sources && profile.sources.length > 0
+      ? profile.sources
+      : profile.url
+        ? [{ url: profile.url, is_primary: true, sort_order: 0 }]
+        : [];
+  return [...rawSources].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
 };
 
 const profileSubscriptionCount = (profile: SubscriptionProfile | null) => {
@@ -320,7 +352,9 @@ interface LoadSubscriptionOptions {
 function isResultTabAvailable(tab: string) {
   if (tab === "nodes") return parsedNodes.value.length > 0;
   if (tab === "groups") return proxyGroups.value.length > 0;
-  if (tab === "rules") return (parsedConfig.value?.rules?.length || 0) > 0;
+  if (tab === "rules") return parsedRuleLines.value.length > 0;
+  if (tab === "providers") return providerItems.value.length > 0;
+  if (tab === "diagnostics") return parseDiagnostics.value.length > 0;
   return tab === "text" || tab === "raw";
 }
 
@@ -331,7 +365,19 @@ function applyActiveTabAfterSubscriptionLoad(options: LoadSubscriptionOptions, p
     activeTab.value = preferredTab;
     return;
   }
-  activeTab.value = parsedNodes.value.length > 0 ? "nodes" : "text";
+  if (parsedNodes.value.length > 0) {
+    activeTab.value = "nodes";
+  } else if (proxyGroups.value.length > 0) {
+    activeTab.value = "groups";
+  } else if (parsedRuleLines.value.length > 0) {
+    activeTab.value = "rules";
+  } else if (providerItems.value.length > 0) {
+    activeTab.value = "providers";
+  } else if (parseDiagnostics.value.length > 0) {
+    activeTab.value = "diagnostics";
+  } else {
+    activeTab.value = "text";
+  }
 }
 
 const loadSubscription = async (options: LoadSubscriptionOptions = {}) => {
@@ -668,12 +714,7 @@ const handleDecode = async () => {
       await loadProfiles(activeProfileId.value);
       await fetchCustomData();
       ElMessage.success("成功拉取并完成 Base64 解码！");
-      // 如果解析出来的节点数大于0，默认跳到 nodes 页签，否则跳到 text
-      if (parsedNodes.value.length > 0) {
-        activeTab.value = "nodes";
-      } else {
-        activeTab.value = "text";
-      }
+      applyActiveTabAfterSubscriptionLoad({ preserveActiveTab: false }, activeTab.value);
     } else {
       throw new Error(response.data.message || "未知错误");
     }
@@ -706,10 +747,159 @@ const parsedConfig = computed<any>(() => {
   }
 });
 
+const isPlainObject = (value: unknown): value is Record<string, any> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const parsedConfigMap = computed<Record<string, any> | null>(() =>
+  isPlainObject(parsedConfig.value) ? parsedConfig.value : null,
+);
+
+const topLevelArrayLength = (key: string) => {
+  const value = parsedConfigMap.value?.[key];
+  return Array.isArray(value) ? value.length : 0;
+};
+
+const parsedRuleLines = computed<string[]>(() => {
+  const rules = parsedConfigMap.value?.rules;
+  return Array.isArray(rules) ? rules.filter((rule) => typeof rule === "string") : [];
+});
+
+const providerValue = (value: unknown) => {
+  if (Array.isArray(value)) return value.join(", ");
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (value === null || value === undefined || value === "") return "-";
+  return String(value);
+};
+
+const proxyProviderUsage = computed<Record<string, number>>(() => {
+  const usage: Record<string, number> = {};
+  for (const group of proxyGroups.value) {
+    const usedProviders = Array.isArray(group.use) ? group.use : [];
+    usedProviders.forEach((name: string) => {
+      usage[name] = (usage[name] || 0) + 1;
+    });
+  }
+  return usage;
+});
+
+const ruleProviderUsage = computed<Record<string, number>>(() => {
+  const usage: Record<string, number> = {};
+  parsedRuleLines.value.forEach((rule) => {
+    const parts = rule.split(",").map((part) => part.trim());
+    if (parts[0] === "RULE-SET" && parts[1]) {
+      usage[parts[1]] = (usage[parts[1]] || 0) + 1;
+    }
+  });
+  return usage;
+});
+
+const providerItemsFromRecord = (
+  record: unknown,
+  kind: ProviderKind,
+  usage: Record<string, number>,
+): ProviderDisplayItem[] => {
+  if (!isPlainObject(record)) return [];
+  return Object.entries(record).map(([name, rawConfig]) => {
+    const config = isPlainObject(rawConfig) ? rawConfig : {};
+    return {
+      kind,
+      name,
+      type: providerValue(config.type),
+      url: providerValue(config.url),
+      path: providerValue(config.path),
+      behavior: providerValue(config.behavior),
+      format: providerValue(config.format),
+      interval: providerValue(config.interval),
+      usageCount: usage[name] || 0,
+      config,
+    };
+  });
+};
+
+const proxyProviderItems = computed<ProviderDisplayItem[]>(() =>
+  providerItemsFromRecord(
+    parsedConfigMap.value?.["proxy-providers"],
+    "proxy",
+    proxyProviderUsage.value,
+  ),
+);
+
+const ruleProviderItems = computed<ProviderDisplayItem[]>(() =>
+  providerItemsFromRecord(
+    parsedConfigMap.value?.["rule-providers"],
+    "rule",
+    ruleProviderUsage.value,
+  ),
+);
+
+const providerItems = computed<ProviderDisplayItem[]>(() => [
+  ...proxyProviderItems.value,
+  ...ruleProviderItems.value,
+]);
+
+const providerUsageLabel = (provider: ProviderDisplayItem) =>
+  provider.kind === "proxy"
+    ? `被 ${provider.usageCount} 个代理组引用`
+    : `被 ${provider.usageCount} 条规则引用`;
+
+const parseDiagnostics = computed<ParseDiagnostic[]>(() => {
+  if (!result.value) return [];
+  const diagnostics: ParseDiagnostic[] = [];
+
+  if (!parsedConfig.value) {
+    diagnostics.push({
+      type: "error",
+      title: "YAML 解析失败",
+      description: "当前明文内容无法被前端解析为 YAML，因此只能展示原始文本。",
+    });
+    return diagnostics;
+  }
+
+  if (!parsedConfigMap.value) {
+    diagnostics.push({
+      type: "warning",
+      title: "配置不是标准 YAML 映射",
+      description: "当前结果不是以键值对形式组织的 Clash/Mihomo 配置，结构化面板暂无法展示。",
+    });
+    return diagnostics;
+  }
+
+  const nodesCount = topLevelArrayLength("proxies");
+  const groupsCount = topLevelArrayLength("proxy-groups");
+  const rulesCount = parsedRuleLines.value.length;
+
+  if (nodesCount === 0 && groupsCount === 0 && rulesCount === 0 && providerItems.value.length === 0) {
+    diagnostics.push({
+      type: "warning",
+      title: "未检测到可展示的结构化资源",
+      description: "当前 YAML 顶层没有非空的 proxies、proxy-groups 或 rules 数组，所以节点、代理组和规则面板不会出现。",
+    });
+  }
+
+  if (providerItems.value.length > 0) {
+    diagnostics.push({
+      type: "info",
+      title: "检测到 Provider 型配置",
+      description: "proxy-providers / rule-providers 已在 Provider 面板展示；具体节点通常由客户端根据 Provider URL 动态拉取。",
+    });
+  }
+
+  if (isMultiSubscriptionProfile.value) {
+    diagnostics.push({
+      type: "info",
+      title: "多订阅合并规则说明",
+      description: "当前主订阅保留代理组和规则，其他订阅只合并顶层 proxies 节点；附加订阅的代理组和规则不会出现在结果中。",
+    });
+  }
+
+  return diagnostics;
+});
+
 // 解析代理节点
 const parsedNodes = computed<ProxyNode[]>(() => {
-  if (!parsedConfig.value || !parsedConfig.value.proxies) return [];
-  return parsedConfig.value.proxies.map((p: any) => ({
+  const proxies = parsedConfigMap.value?.proxies;
+  if (!Array.isArray(proxies)) return [];
+  return proxies.filter(isPlainObject).map((p: any) => ({
     name: p.name,
     type: p.type,
     server: p.server,
@@ -720,8 +910,8 @@ const parsedNodes = computed<ProxyNode[]>(() => {
 
 // 代理组解析
 const proxyGroups = computed<any[]>(() => {
-  if (!parsedConfig.value || !parsedConfig.value["proxy-groups"]) return [];
-  return parsedConfig.value["proxy-groups"];
+  const groups = parsedConfigMap.value?.["proxy-groups"];
+  return Array.isArray(groups) ? groups.filter(isPlainObject) : [];
 });
 
 const draggableNodes = ref<ProxyNode[]>([]);
@@ -930,9 +1120,8 @@ const parseRuleForDisplay = (ruleStr: string) => {
 };
 
 const ruleTargets = computed(() => {
-  if (!parsedConfig.value || !parsedConfig.value.rules) return [];
   const targets = new Set<string>();
-  parsedConfig.value.rules.forEach((ruleStr: string) => {
+  parsedRuleLines.value.forEach((ruleStr: string) => {
     targets.add(parseRuleForDisplay(ruleStr).target);
   });
   return Array.from(targets).sort();
@@ -949,8 +1138,7 @@ watch([ruleSearchQuery, ruleTargetFilter], () => {
 
 // 分流规则解析 (拆解 DOMAIN-SUFFIX,google.com,PROXY)
 const parsedRules = computed<RuleDisplayRow[]>(() => {
-  if (!parsedConfig.value || !parsedConfig.value.rules) return [];
-  let rules = parsedConfig.value.rules.map((ruleStr: string) => parseRuleForDisplay(ruleStr));
+  let rules = parsedRuleLines.value.map((ruleStr: string) => parseRuleForDisplay(ruleStr));
 
   if (ruleTargetFilter.value) {
     rules = rules.filter((r: any) => r.target === ruleTargetFilter.value);
@@ -2362,14 +2550,20 @@ const submitChangePassword = async () => {
 	                }}
 	              </el-tag>
 	            </div>
-	            <div class="profile-meta">
-	              {{
-	                profile.source_type === 'local'
-	                  ? '不依赖订阅地址'
-	                  : profileSubscriptionCount(profile) > 1
-	                    ? `主订阅：${primaryProfileUrl(profile)}`
-	                    : primaryProfileUrl(profile)
-	              }}
+	            <div v-if="profile.source_type === 'local'" class="profile-meta">
+	              不依赖订阅地址
+	            </div>
+	            <div v-else class="profile-source-summary">
+	              <div
+	                v-for="source in profileDisplaySources(profile)"
+	                :key="`${profile.id}-${source.url}`"
+	                class="profile-source-chip"
+	                :class="{ 'is-primary': source.is_primary }"
+	                :title="source.url"
+	              >
+	                <span class="profile-source-role">{{ source.is_primary ? '主订阅' : '附加' }}</span>
+	                <span class="profile-source-url">{{ source.url }}</span>
+	              </div>
 	            </div>
 	            <div class="profile-actions" @click.stop>
 	              <IconTooltipButton
@@ -2423,6 +2617,22 @@ const submitChangePassword = async () => {
               <el-icon class="input-prefix-icon"><Link /></el-icon>
             </template>
           </el-input>
+
+	          <div
+	            v-if="currentProfile?.source_type === 'remote' && isMultiSubscriptionProfile"
+	            class="active-source-strip"
+	          >
+	            <div
+	              v-for="source in profileDisplaySources(currentProfile)"
+	              :key="source.url"
+	              class="active-source-item"
+	              :class="{ 'is-primary': source.is_primary }"
+	              :title="source.url"
+	            >
+	              <span>{{ source.is_primary ? '主订阅' : '附加订阅' }}</span>
+	              <strong>{{ source.url }}</strong>
+	            </div>
+	          </div>
 
           <div class="button-group icon-action-row" aria-label="订阅处理操作">
 	            <IconTooltipButton
@@ -2492,6 +2702,24 @@ const submitChangePassword = async () => {
                 <span class="meta-label">检测到节点：</span>
                 <el-tag size="small" effect="dark" type="success"
                   >{{ parsedNodes.length }} 个</el-tag
+                >
+              </div>
+              <div v-if="proxyGroups.length > 0" class="meta-item">
+                <span class="meta-label">代理组：</span>
+                <el-tag size="small" effect="plain" type="primary"
+                  >{{ proxyGroups.length }} 个</el-tag
+                >
+              </div>
+              <div v-if="parsedRuleLines.length > 0" class="meta-item">
+                <span class="meta-label">规则：</span>
+                <el-tag size="small" effect="plain" type="warning"
+                  >{{ parsedRuleLines.length }} 条</el-tag
+                >
+              </div>
+              <div v-if="providerItems.length > 0" class="meta-item">
+                <span class="meta-label">Provider：</span>
+                <el-tag size="small" effect="plain" type="info"
+                  >{{ providerItems.length }} 个</el-tag
                 >
               </div>
             </div>
@@ -2762,10 +2990,10 @@ const submitChangePassword = async () => {
             </el-tab-pane>
 
             <!-- 规则列表页签 -->
-            <el-tab-pane name="rules" v-if="parsedConfig?.rules?.length > 0">
+            <el-tab-pane name="rules" v-if="parsedRuleLines.length > 0">
               <template #label>
                 <span class="tab-label"
-                  >📋 分流规则 ({{ parsedConfig.rules.length }})</span
+                  >📋 分流规则 ({{ parsedRuleLines.length }})</span
                 >
               </template>
 
@@ -3009,6 +3237,94 @@ const submitChangePassword = async () => {
                     :total="parsedRules.length"
                   />
                 </div>
+              </div>
+            </el-tab-pane>
+
+            <!-- Provider 资源页签 -->
+            <el-tab-pane name="providers" v-if="providerItems.length > 0">
+              <template #label>
+                <span class="tab-label">📦 Provider 资源 ({{ providerItems.length }})</span>
+              </template>
+              <div class="provider-panel">
+                <div class="provider-summary">
+                  <el-tag type="primary" effect="plain">
+                    代理 Provider：{{ proxyProviderItems.length }}
+                  </el-tag>
+                  <el-tag type="warning" effect="plain">
+                    规则 Provider：{{ ruleProviderItems.length }}
+                  </el-tag>
+                </div>
+                <div class="provider-grid">
+                  <div
+                    v-for="provider in providerItems"
+                    :key="`${provider.kind}-${provider.name}`"
+                    class="provider-card"
+                  >
+                    <div class="provider-card-header">
+                      <div class="provider-title">
+                        <span>{{ provider.name }}</span>
+                        <small>{{ provider.kind === 'proxy' ? '代理提供者' : '规则提供者' }}</small>
+                      </div>
+                      <el-tag
+                        size="small"
+                        :type="provider.kind === 'proxy' ? 'primary' : 'warning'"
+                        effect="dark"
+                      >
+                        {{ provider.type }}
+                      </el-tag>
+                    </div>
+                    <div class="provider-detail-list">
+                      <div class="provider-detail-row" v-if="provider.url !== '-'">
+                        <span>URL</span>
+                        <strong :title="provider.url">{{ provider.url }}</strong>
+                      </div>
+                      <div class="provider-detail-row" v-if="provider.path !== '-'">
+                        <span>路径</span>
+                        <strong :title="provider.path">{{ provider.path }}</strong>
+                      </div>
+                      <div class="provider-detail-row" v-if="provider.behavior !== '-'">
+                        <span>行为</span>
+                        <strong>{{ provider.behavior }}</strong>
+                      </div>
+                      <div class="provider-detail-row" v-if="provider.format !== '-'">
+                        <span>格式</span>
+                        <strong>{{ provider.format }}</strong>
+                      </div>
+                      <div class="provider-detail-row" v-if="provider.interval !== '-'">
+                        <span>刷新间隔</span>
+                        <strong>{{ provider.interval }}</strong>
+                      </div>
+                      <div class="provider-detail-row">
+                        <span>引用</span>
+                        <strong>{{ providerUsageLabel(provider) }}</strong>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </el-tab-pane>
+
+            <!-- 解析诊断页签 -->
+            <el-tab-pane name="diagnostics" v-if="parseDiagnostics.length > 0">
+              <template #label>
+                <span class="tab-label">🧭 解析诊断 ({{ parseDiagnostics.length }})</span>
+              </template>
+              <div class="diagnostics-panel">
+                <div class="diagnostics-metrics">
+                  <el-tag effect="plain" type="success">节点：{{ parsedNodes.length }}</el-tag>
+                  <el-tag effect="plain" type="primary">代理组：{{ proxyGroups.length }}</el-tag>
+                  <el-tag effect="plain" type="warning">规则：{{ parsedRuleLines.length }}</el-tag>
+                  <el-tag effect="plain" type="info">Provider：{{ providerItems.length }}</el-tag>
+                </div>
+                <el-alert
+                  v-for="diagnostic in parseDiagnostics"
+                  :key="diagnostic.title"
+                  :type="diagnostic.type"
+                  :title="diagnostic.title"
+                  :description="diagnostic.description"
+                  show-icon
+                  :closable="false"
+                />
               </div>
             </el-tab-pane>
 
@@ -3979,6 +4295,45 @@ const submitChangePassword = async () => {
   white-space: nowrap;
 }
 
+.profile-source-summary {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.profile-source-chip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 5px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.profile-source-chip.is-primary {
+  border-color: rgba(56, 189, 248, 0.38);
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.profile-source-role {
+  color: #e0f2fe;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.profile-source-url {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .profile-actions {
   display: flex;
   justify-content: flex-end;
@@ -4053,6 +4408,44 @@ const submitChangePassword = async () => {
 
 .decode-input {
   font-size: 16px;
+}
+
+.active-source-strip {
+  display: grid;
+  gap: 8px;
+}
+
+.active-source-item {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.active-source-item.is-primary {
+  border-color: rgba(34, 197, 94, 0.36);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.active-source-item span {
+  color: #bbf7d0;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.active-source-item strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .input-prefix-icon {
@@ -4239,6 +4632,15 @@ const submitChangePassword = async () => {
 
   .profile-source-footer {
     align-items: stretch;
+  }
+
+  .active-source-item {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .provider-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -4475,6 +4877,106 @@ const submitChangePassword = async () => {
   background-color: rgba(255, 255, 255, 0.04) !important;
 }
 
+.provider-panel,
+.diagnostics-panel {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.provider-summary,
+.diagnostics-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.provider-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.46);
+}
+
+.provider-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-title {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.provider-title span {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-title small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.provider-detail-list {
+  display: grid;
+  gap: 8px;
+}
+
+.provider-detail-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.provider-detail-row span {
+  color: rgba(226, 232, 240, 0.58);
+}
+
+.provider-detail-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #dbeafe;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostics-panel :deep(.el-alert) {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.diagnostics-panel :deep(.el-alert__title) {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.diagnostics-panel :deep(.el-alert__description) {
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
 /* 代理组卡片系统 */
 .groups-grid {
   display: grid;
@@ -4699,6 +5201,11 @@ const submitChangePassword = async () => {
   .rules-primary-actions {
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .provider-detail-row {
+    grid-template-columns: 1fr;
+    gap: 3px;
   }
 }
 
