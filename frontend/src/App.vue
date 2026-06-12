@@ -12,10 +12,14 @@ import {
   MoreFilled,
   Select,
   Refresh,
+  CircleClose,
+  Connection,
   CopyDocument,
   Download,
   Upload,
   Lock,
+  Promotion,
+  Remove,
   SwitchButton,
 } from "@element-plus/icons-vue";
 import axios from "axios";
@@ -1443,6 +1447,10 @@ const selectRejectPolicy = () => {
   if (!newGroupForm.value.proxies.includes("REJECT")) {
     newGroupForm.value.proxies.push("REJECT");
   }
+};
+
+const clearGroupProxies = () => {
+  newGroupForm.value.proxies = [];
 };
 
 const saveCustomGroup = async () => {
@@ -3590,7 +3598,7 @@ const submitChangePassword = async () => {
               size="small"
               type="primary"
               plain
-              :icon="Download"
+              :icon="Promotion"
               @click="selectAllNodes"
             />
             <IconTooltipButton
@@ -3606,7 +3614,7 @@ const submitChangePassword = async () => {
               size="small"
               type="success"
               plain
-              :icon="Select"
+              :icon="Connection"
               @click="selectDirectPolicy"
             />
             <IconTooltipButton
@@ -3614,8 +3622,17 @@ const submitChangePassword = async () => {
               size="small"
               type="danger"
               plain
-              :icon="Delete"
+              :icon="CircleClose"
               @click="selectRejectPolicy"
+            />
+            <IconTooltipButton
+              label="清空包含的代理"
+              size="small"
+              type="warning"
+              plain
+              :disabled="newGroupForm.proxies.length === 0"
+              :icon="Remove"
+              @click="clearGroupProxies"
             />
           </div>
           <el-select
@@ -5499,6 +5516,32 @@ const submitChangePassword = async () => {
 
 .dialog-icon-actions {
   margin-bottom: 12px;
+}
+
+.dialog-icon-actions :deep(.el-button.is-plain) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.dialog-icon-actions :deep(.el-button--primary.is-plain) {
+  --el-button-text-color: #bfdbfe !important;
+  --el-button-bg-color: rgba(37, 99, 235, 0.16) !important;
+  --el-button-border-color: rgba(96, 165, 250, 0.46) !important;
+  --el-button-hover-text-color: #ffffff !important;
+  --el-button-hover-bg-color: #2563eb !important;
+  --el-button-hover-border-color: #3b82f6 !important;
+  --el-button-active-text-color: #ffffff !important;
+  --el-button-active-bg-color: #1d4ed8 !important;
+  --el-button-active-border-color: #2563eb !important;
+  background: var(--el-button-bg-color) !important;
+  border-color: var(--el-button-border-color) !important;
+  color: var(--el-button-text-color) !important;
+}
+
+.dialog-icon-actions :deep(.el-button.is-disabled) {
+  --el-button-disabled-text-color: rgba(148, 163, 184, 0.5) !important;
+  --el-button-disabled-bg-color: rgba(15, 23, 42, 0.28) !important;
+  --el-button-disabled-border-color: rgba(148, 163, 184, 0.14) !important;
+  box-shadow: none;
 }
 
 .dialog-icon-actions--end {
