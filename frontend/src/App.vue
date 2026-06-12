@@ -4004,6 +4004,19 @@ const submitChangePassword = async () => {
   min-width: 104px;
 }
 
+.profile-source-row :deep(.el-button--primary.is-plain),
+.profile-source-footer :deep(.el-button--primary.is-plain) {
+  --el-button-text-color: #e0f2fe;
+  --el-button-bg-color: rgba(var(--color-primary-rgb), 0.18);
+  --el-button-border-color: rgba(var(--color-primary-rgb), 0.45);
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: var(--color-primary);
+  --el-button-hover-border-color: var(--color-primary);
+  --el-button-active-text-color: #ffffff;
+  --el-button-active-bg-color: #0284c7;
+  --el-button-active-border-color: #0284c7;
+}
+
 .profile-source-footer {
   display: flex;
   align-items: center;
