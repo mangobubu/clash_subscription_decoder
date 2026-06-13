@@ -2589,11 +2589,12 @@ func stringSliceFromAny(value interface{}) []string {
 // handleCreateCustomGroup 创建新策略组
 func handleCreateCustomGroup(c *gin.Context) {
 	var req struct {
-		ProfileID uint     `json:"profile_id"`
-		Name      string   `json:"name"`
-		Type      string   `json:"type"`
-		Proxies   []string `json:"proxies"`
-		Exclude   string   `json:"exclude"`
+		ProfileID                   uint     `json:"profile_id"`
+		Name                        string   `json:"name"`
+		Type                        string   `json:"type"`
+		Proxies                     []string `json:"proxies"`
+		Exclude                     string   `json:"exclude"`
+		ShadowrocketUseBuiltinProxy bool     `json:"shadowrocket_use_builtin_proxy"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
@@ -2606,11 +2607,12 @@ func handleCreateCustomGroup(c *gin.Context) {
 
 	proxiesBytes, _ := json.Marshal(req.Proxies)
 	group := CustomProxyGroup{
-		ProfileID: profileID,
-		Name:      req.Name,
-		Type:      req.Type,
-		Proxies:   string(proxiesBytes),
-		Exclude:   req.Exclude,
+		ProfileID:                   profileID,
+		Name:                        req.Name,
+		Type:                        req.Type,
+		Proxies:                     string(proxiesBytes),
+		Exclude:                     req.Exclude,
+		ShadowrocketUseBuiltinProxy: req.ShadowrocketUseBuiltinProxy,
 	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
 		if err := UnhideSubscriptionResourceTx(tx, profileID, resourceOrderTypeGroups, group.Name); err != nil {
@@ -2630,10 +2632,11 @@ func handleCreateCustomGroup(c *gin.Context) {
 func handleUpdateCustomGroup(c *gin.Context) {
 	id := c.Param("id")
 	var req struct {
-		Name    string   `json:"name"`
-		Type    string   `json:"type"`
-		Proxies []string `json:"proxies"`
-		Exclude string   `json:"exclude"`
+		Name                        string   `json:"name"`
+		Type                        string   `json:"type"`
+		Proxies                     []string `json:"proxies"`
+		Exclude                     string   `json:"exclude"`
+		ShadowrocketUseBuiltinProxy bool     `json:"shadowrocket_use_builtin_proxy"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
@@ -2652,6 +2655,7 @@ func handleUpdateCustomGroup(c *gin.Context) {
 	group.Type = req.Type
 	group.Proxies = string(proxiesBytes)
 	group.Exclude = req.Exclude
+	group.ShadowrocketUseBuiltinProxy = req.ShadowrocketUseBuiltinProxy
 
 	if err := DB.Transaction(func(tx *gorm.DB) error {
 		if strings.TrimSpace(oldName) != strings.TrimSpace(group.Name) {
@@ -4662,19 +4666,21 @@ func serveSubscriptionByToken(c *gin.Context, format string, token string) {
 
 	if err := refreshProfileCache(&profile); err != nil {
 		if profile.Decoded != "" {
-			serveFinalSubscription(c, format, profile.Decoded)
+			serveFinalSubscription(c, format, profile.Decoded, profile.ID)
 			return
 		}
 		c.String(http.StatusBadGateway, "Failed to build subscription: "+err.Error())
 		return
 	}
 
-	serveFinalSubscription(c, format, profile.Decoded)
+	serveFinalSubscription(c, format, profile.Decoded, profile.ID)
 }
 
-func serveFinalSubscription(c *gin.Context, format string, clashYAML string) {
+func serveFinalSubscription(c *gin.Context, format string, clashYAML string, profileID uint) {
 	if format == "shadowrocket" {
-		shadowrocketConfig, err := ConvertClashYAMLToShadowrocket(clashYAML)
+		shadowrocketConfig, err := ConvertClashYAMLToShadowrocketWithOptions(clashYAML, shadowrocketConversionOptions{
+			BuiltinProxyGroups: loadShadowrocketBuiltinProxyGroupNames(profileID),
+		})
 		if err != nil {
 			c.String(http.StatusUnprocessableEntity, "Failed to generate Shadowrocket config: "+err.Error())
 			return
@@ -4696,6 +4702,29 @@ func serveFinalSubscription(c *gin.Context, format string, clashYAML string) {
 	}
 
 	c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(clashYAML))
+}
+
+func loadShadowrocketBuiltinProxyGroupNames(profileID uint) map[string]bool {
+	if profileID == 0 {
+		return nil
+	}
+	groups, err := GetCustomProxyGroups(profileID)
+	if err != nil {
+		log.Printf("load Shadowrocket builtin proxy groups warning: profile=%d err=%v", profileID, err)
+		return nil
+	}
+	names := make(map[string]bool)
+	for _, group := range groups {
+		if !group.ShadowrocketUseBuiltinProxy {
+			continue
+		}
+		name := strings.TrimSpace(group.Name)
+		if name == "" {
+			continue
+		}
+		names[name] = true
+	}
+	return names
 }
 
 func convertFinalSubscriptionToSurge(format string, clashYAML string) (string, string, error) {

@@ -21,6 +21,7 @@ import {
   Promotion,
   Remove,
   SwitchButton,
+  InfoFilled,
 } from "@element-plus/icons-vue";
 import axios from "axios";
 import { Codemirror } from "vue-codemirror";
@@ -1303,6 +1304,7 @@ const newGroupForm = ref({
   type: "select",
   proxies: [] as string[],
   exclude: "",
+  shadowrocket_use_builtin_proxy: false,
 });
 
 const groupTypes = ["select", "url-test", "fallback", "load-balance"];
@@ -1317,7 +1319,13 @@ const copyGroupSourceOptions = computed(() =>
 
 const openGroupDialog = () => {
   editingGroupId.value = null;
-  newGroupForm.value = { name: "", type: "select", proxies: [], exclude: "" };
+  newGroupForm.value = {
+    name: "",
+    type: "select",
+    proxies: [],
+    exclude: "",
+    shadowrocket_use_builtin_proxy: false,
+  };
   groupDialogVisible.value = true;
 };
 
@@ -1380,6 +1388,11 @@ const openCustomGroupEditor = (groupName: string) => {
     type: customInfo.Type || customInfo.type,
     proxies: proxiesList,
     exclude: customInfo.Exclude || customInfo.exclude || "",
+    shadowrocket_use_builtin_proxy: Boolean(
+      customInfo.shadowrocket_use_builtin_proxy ||
+        customInfo.ShadowrocketUseBuiltinProxy ||
+        customInfo.shadowrocketUseBuiltinProxy,
+    ),
   };
   groupDialogVisible.value = true;
 };
@@ -3707,6 +3720,26 @@ const submitChangePassword = async () => {
             />
           </el-select>
         </el-form-item>
+        <el-form-item>
+          <template #label>
+            <span class="form-label-with-tooltip">
+              Shadowrocket 映射为内置 PROXY
+              <el-tooltip
+                content="开启后仅影响 Shadowrocket 配置：引用此代理组的规则和代理组成员会输出为内置 PROXY，跟随 Shadowrocket 首页当前选中的节点；Clash/Mihomo 与 Surge 不受影响。"
+                placement="top"
+                effect="dark"
+                popper-class="app-tooltip"
+              >
+                <el-icon class="form-label-help"><InfoFilled /></el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <el-switch
+            v-model="newGroupForm.shadowrocket_use_builtin_proxy"
+            active-text="开启"
+            inactive-text="关闭"
+          />
+        </el-form-item>
         <el-form-item label="配置包含的目标代理">
           <div class="dialog-icon-actions" aria-label="策略组快捷填充">
             <IconTooltipButton
@@ -5928,6 +5961,17 @@ const submitChangePassword = async () => {
 
 :deep(.app-tooltip) {
   max-width: min(260px, calc(100vw - 32px));
+}
+
+.form-label-with-tooltip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-label-help {
+  color: var(--text-secondary);
+  cursor: help;
 }
 
 :deep(.glass-dialog) {

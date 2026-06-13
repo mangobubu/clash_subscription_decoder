@@ -79,14 +79,15 @@ type User struct {
 }
 
 type CustomProxyGroup struct {
-	ID        uint   `gorm:"primarykey"`
-	ProfileID uint   `gorm:"not null;default:0;uniqueIndex:idx_profile_group_name"`
-	Name      string `gorm:"not null;uniqueIndex:idx_profile_group_name"`
-	Type      string `gorm:"not null"`
-	Proxies   string `gorm:"type:text;not null"` // JSON array of string
-	Exclude   string `gorm:"type:text"`          // 排除关键字或正则表达式
-	Extra     string `gorm:"type:text"`          // JSON object for preserved Clash/Mihomo group fields
-	CreatedAt int64  `gorm:"autoCreateTime"`
+	ID                          uint   `gorm:"primarykey"`
+	ProfileID                   uint   `gorm:"not null;default:0;uniqueIndex:idx_profile_group_name"`
+	Name                        string `gorm:"not null;uniqueIndex:idx_profile_group_name"`
+	Type                        string `gorm:"not null"`
+	Proxies                     string `gorm:"type:text;not null"` // JSON array of string
+	Exclude                     string `gorm:"type:text"`          // 排除关键字或正则表达式
+	Extra                       string `gorm:"type:text"`          // JSON object for preserved Clash/Mihomo group fields
+	ShadowrocketUseBuiltinProxy bool   `gorm:"not null;default:false" json:"shadowrocket_use_builtin_proxy"`
+	CreatedAt                   int64  `gorm:"autoCreateTime"`
 }
 
 type CustomNode struct {

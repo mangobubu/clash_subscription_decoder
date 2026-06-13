@@ -125,6 +125,60 @@ proxies:
 	assertContains(t, got, "FINAL,PROXY")
 }
 
+func TestConvertClashYAMLToShadowrocketMapsConfiguredGroupsToBuiltinProxy(t *testing.T) {
+	input := `
+proxies:
+  - name: Primary
+    type: ss
+    server: primary.example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: primary-pass
+  - name: Backup
+    type: ss
+    server: backup.example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: backup-pass
+proxy-groups:
+  - name: 节点选择
+    type: select
+    proxies:
+      - Primary
+  - name: 微软服务
+    type: select
+    proxies:
+      - 节点选择
+      - Backup
+      - DIRECT
+  - name: 保持原样
+    type: select
+    proxies:
+      - Backup
+rules:
+  - DOMAIN-SUFFIX,storage.msn.com,节点选择
+  - DOMAIN-SUFFIX,office.com,微软服务
+  - DOMAIN-SUFFIX,plain.example,保持原样
+  - MATCH,节点选择
+`
+
+	got, err := ConvertClashYAMLToShadowrocketWithOptions(input, shadowrocketConversionOptions{
+		BuiltinProxyGroups: map[string]bool{"节点选择": true},
+	})
+	if err != nil {
+		t.Fatalf("ConvertClashYAMLToShadowrocketWithOptions returned error: %v", err)
+	}
+
+	assertContains(t, got, "节点选择 = select,Primary")
+	assertContains(t, got, "微软服务 = select,PROXY,Backup,DIRECT")
+	assertContains(t, got, "保持原样 = select,Backup")
+	assertContains(t, got, "DOMAIN-SUFFIX,storage.msn.com,PROXY")
+	assertContains(t, got, "DOMAIN-SUFFIX,office.com,微软服务")
+	assertContains(t, got, "DOMAIN-SUFFIX,plain.example,保持原样")
+	assertContains(t, got, "FINAL,PROXY")
+	assertNotContains(t, got, "DOMAIN-SUFFIX,storage.msn.com,节点选择")
+}
+
 func TestConvertClashYAMLToShadowrocketKeepsAnyTLS(t *testing.T) {
 	input := `
 proxies:
@@ -176,5 +230,12 @@ func assertContains(t *testing.T, content, expected string) {
 	t.Helper()
 	if !strings.Contains(content, expected) {
 		t.Fatalf("expected output to contain %q, got:\n%s", expected, content)
+	}
+}
+
+func assertNotContains(t *testing.T, content, unexpected string) {
+	t.Helper()
+	if strings.Contains(content, unexpected) {
+		t.Fatalf("expected output not to contain %q, got:\n%s", unexpected, content)
 	}
 }
