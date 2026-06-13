@@ -583,7 +583,7 @@ func GetCustomNodes(profileID uint) ([]CustomNode, error) {
 // GetCustomRules returns all custom routing rules
 func GetCustomRules(profileID uint) ([]CustomRule, error) {
 	var rules []CustomRule
-	err := DB.Where("profile_id = ?", profileID).Order("created_at asc, id asc").Find(&rules).Error
+	err := DB.Where("profile_id = ?", profileID).Order("created_at desc, id desc").Find(&rules).Error
 	return rules, err
 }
 

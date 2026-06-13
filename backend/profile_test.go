@@ -507,6 +507,25 @@ rules:
 	})
 }
 
+func TestInjectCustomRulesKeepsNewestCustomRulesFirst(t *testing.T) {
+	content := `rules:
+  - DOMAIN-SUFFIX,origin.example,DIRECT
+  - MATCH,DIRECT
+`
+
+	got := injectCustomRulesWithRules(content, []CustomRule{
+		{ID: 3, Type: "DOMAIN-SUFFIX", Payload: "new.example", Target: "PROXY"},
+		{ID: 2, Type: "DOMAIN-SUFFIX", Payload: "old.example", Target: "DIRECT"},
+	})
+
+	assertStringSliceEqual(t, yamlSequenceScalars(t, got, "rules"), []string{
+		"DOMAIN-SUFFIX,new.example,PROXY",
+		"DOMAIN-SUFFIX,old.example,DIRECT",
+		"DOMAIN-SUFFIX,origin.example,DIRECT",
+		"MATCH,DIRECT",
+	})
+}
+
 func TestInjectCustomRulesDropsOriginalRulesWithDeletedTargets(t *testing.T) {
 	content := `proxies:
   - name: 可用节点
