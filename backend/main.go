@@ -3796,7 +3796,15 @@ func ruleFingerprintFromParts(parts []string) string {
 		return ruleType
 	}
 	if len(parts) >= 3 {
-		return fmt.Sprintf("%s,%s", ruleType, parts[1])
+		targetStart := len(parts) - 1
+		if isRuleOptionSuffix(parts[len(parts)-1]) && len(parts) >= 4 {
+			targetStart = len(parts) - 2
+		}
+		payload := strings.TrimSpace(strings.Join(parts[1:targetStart], ","))
+		if payload == "" {
+			return ""
+		}
+		return fmt.Sprintf("%s,%s", ruleType, payload)
 	}
 	if len(parts) == 2 {
 		return ruleType

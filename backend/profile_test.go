@@ -528,6 +528,24 @@ rules:
 	})
 }
 
+func TestInjectCustomRulesHandlesCommaPayloadFingerprint(t *testing.T) {
+	content := `rules:
+  - AND,((DOMAIN,example.org),(NETWORK,UDP)),REJECT
+  - GEOIP,CN,DIRECT,no-resolve
+  - MATCH,DIRECT
+`
+
+	got := injectCustomRulesWithRules(content, []CustomRule{
+		{Type: "AND", Payload: "((DOMAIN,example.org),(NETWORK,UDP))", Target: deletedCustomRuleTarget},
+		{Type: "GEOIP", Payload: "CN", Target: "PROXY,no-resolve"},
+	})
+
+	assertStringSliceEqual(t, yamlSequenceScalars(t, got, "rules"), []string{
+		"GEOIP,CN,PROXY,no-resolve",
+		"MATCH,DIRECT",
+	})
+}
+
 func TestFilterNewLocalizedRulesSkipsExistingManualRules(t *testing.T) {
 	existing := []CustomRule{
 		{ID: 1, ProfileID: 3, Type: "GEOSITE", Payload: "cn", Target: "REJECT"},

@@ -1095,8 +1095,36 @@ interface RuleDisplayRow {
   target: string;
 }
 
-const getRuleIdentityKey = (row: Pick<RuleDisplayRow, "type" | "payload">) =>
-  row.payload === "-" ? row.type : `${row.type},${row.payload}`;
+interface RuleWritePayload {
+  type: string;
+  payload: string;
+  target: string;
+}
+
+type RuleIdentity = Pick<RuleWritePayload, "type" | "payload">;
+
+const deletedCustomRuleTarget = "__DELETE__";
+
+const normalizeRulePayloadForSubmit = (payload: string) => {
+  const normalized = String(payload || "").trim();
+  return normalized === "" || normalized === "-" ? "-" : normalized;
+};
+
+const normalizeRuleTypeForSubmit = (type: string) => String(type || "").trim().toUpperCase();
+
+const normalizeRuleTargetForSubmit = (target: string) => String(target || "").trim();
+
+const getRuleIdentityKey = (row: RuleIdentity) => {
+  const type = normalizeRuleTypeForSubmit(row.type);
+  const payload = normalizeRulePayloadForSubmit(row.payload);
+  return payload === "-" ? type : `${type},${payload}`;
+};
+
+const buildRuleWritePayload = (rule: RuleWritePayload): RuleWritePayload => ({
+  type: normalizeRuleTypeForSubmit(rule.type),
+  payload: normalizeRulePayloadForSubmit(rule.payload),
+  target: normalizeRuleTargetForSubmit(rule.target),
+});
 
 const parseRuleForDisplay = (ruleStr: string) => {
   const parts = String(ruleStr).split(",").map((part) => part.trim());
@@ -1947,11 +1975,13 @@ const deleteFilteredRulesByTarget = async () => {
     return;
   }
 
-  const rules = parsedRules.value.map((row) => ({
-    type: row.type,
-    payload: row.payload === "-" ? "-" : row.payload,
-    target: row.target,
-  }));
+  const rules = parsedRules.value.map((row) =>
+    buildRuleWritePayload({
+      type: row.type,
+      payload: row.payload,
+      target: row.target,
+    }),
+  );
   if (rules.length === 0) {
     ElMessage.warning("当前筛选结果为空，无法删除");
     return;
@@ -1974,15 +2004,7 @@ const deleteFilteredRulesByTarget = async () => {
 
   isDeletingFilteredRules.value = true;
   try {
-    const res = await axios.post(buildBackendUrl("/api/custom-rules/batch-delete"), {
-      profile_id: activeProfileId.value,
-      rules,
-    });
-    if (res.data.code !== 200) {
-      throw new Error(res.data.message || "批量删除规则失败");
-    }
-
-    const deletedCount = res.data.data?.deleted || rules.length;
+    const deletedCount = await persistRuleDeletions(rules);
     ElMessage.success(`已删除 ${deletedCount} 条规则，正在刷新规则列表...`);
     ruleTargetFilter.value = "";
     dirtyRulesMap.value = {};
@@ -1999,6 +2021,7 @@ const deleteFilteredRulesByTarget = async () => {
 const ruleDialogVisible = ref(false);
 const isSubmittingRule = ref(false);
 const editingRuleId = ref<number | null>(null);
+const editingOriginalRuleIdentity = ref<RuleIdentity | null>(null);
 const copyRulesDialogVisible = ref(false);
 const isCopyingRules = ref(false);
 const isLocalizingRules = ref(false);
@@ -2019,6 +2042,7 @@ const ruleTypes = [
   "GEOSITE",
   "GEOIP",
   "MATCH",
+  "FINAL",
   "PROCESS-NAME",
 ];
 
@@ -2111,6 +2135,7 @@ const handleRuleToolbarCommand = (command: string) => {
 
 const openRuleDialog = () => {
   editingRuleId.value = null;
+  editingOriginalRuleIdentity.value = null;
   newRuleForm.value = { type: "DOMAIN-SUFFIX", payload: "", target: "PROXY" };
   ruleDialogVisible.value = true;
 };
@@ -2119,8 +2144,12 @@ const editRule = (row: any) => {
   let key = getRuleIdentityKey(row);
   let customInfo = customRulesDict.value[key];
 
-  if (customInfo) {
+  if (customInfo && customInfo.Target !== deletedCustomRuleTarget) {
     editingRuleId.value = customInfo.ID;
+    editingOriginalRuleIdentity.value = {
+      type: customInfo.Type,
+      payload: customInfo.Payload,
+    };
     newRuleForm.value = {
       type: customInfo.Type,
       payload: customInfo.Payload === "-" ? "" : customInfo.Payload,
@@ -2128,6 +2157,10 @@ const editRule = (row: any) => {
     };
   } else {
     editingRuleId.value = null; // 接管原生规则
+    editingOriginalRuleIdentity.value = {
+      type: row.type,
+      payload: row.payload,
+    };
     newRuleForm.value = {
       type: row.type,
       payload: row.payload === "-" ? "" : row.payload,
@@ -2137,12 +2170,26 @@ const editRule = (row: any) => {
   ruleDialogVisible.value = true;
 };
 
-const deleteCustomRule = (row: any) => {
+const persistRuleDeletions = async (rules: RuleWritePayload[]) => {
+  if (!activeProfileId.value) {
+    throw new Error("请先选择一个配置");
+  }
+  const res = await axios.post(buildBackendUrl("/api/custom-rules/batch-delete"), {
+    profile_id: activeProfileId.value,
+    rules: rules.map(buildRuleWritePayload),
+  });
+  if (res.data.code !== 200) {
+    throw new Error(res.data.message || "规则删除失败");
+  }
+  return res.data.data?.deleted || rules.length;
+};
+
+const removeCustomRuleOverride = (row: any) => {
   let key = getRuleIdentityKey(row);
   let customInfo = customRulesDict.value[key];
-  if (!customInfo) return;
+  if (!customInfo || customInfo.Target === deletedCustomRuleTarget) return;
 
-  ElMessageBox.confirm(`确定要移除对该规则的接管并恢复原生状态吗？`, "安全提示", {
+  ElMessageBox.confirm(`确定要移除对该规则的接管吗？订阅中原本存在的同名规则会恢复显示。`, "移除接管确认", {
     confirmButtonText: "确认移除",
     cancelButtonText: "取消",
     type: "warning",
@@ -2153,7 +2200,7 @@ const deleteCustomRule = (row: any) => {
           buildBackendUrl(`/api/custom-rules/${customInfo.ID}`)
         );
         if (res.data.code === 200) {
-          ElMessage.success("自定义分流规则已成功移除！");
+          ElMessage.success("规则接管已移除！");
           await fetchCustomData();
           if (activeProfileId.value) {
             await loadSubscription({ preferredTab: "rules" });
@@ -2166,12 +2213,56 @@ const deleteCustomRule = (row: any) => {
     .catch(() => {});
 };
 
+const deleteRule = async (row: RuleDisplayRow) => {
+  if (!activeProfileId.value) {
+    ElMessage.warning("请先选择一个配置");
+    return;
+  }
+
+  const pendingChangeTip = hasDirtyRules.value ? "当前未保存的规则修改会在删除成功后清空。" : "";
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除这条分流规则吗？删除后刷新订阅也不会恢复。${pendingChangeTip}`,
+      "删除规则确认",
+      {
+        confirmButtonText: "确认删除",
+        cancelButtonText: "取消",
+        type: "warning",
+        customClass: "glass-dialog",
+      },
+    );
+  } catch {
+    return;
+  }
+
+  isSubmittingRule.value = true;
+  try {
+    const deletedCount = await persistRuleDeletions([
+      buildRuleWritePayload({
+        type: row.type,
+        payload: row.payload,
+        target: row.target,
+      }),
+    ]);
+    ElMessage.success(`已删除 ${deletedCount} 条规则，正在刷新规则列表...`);
+    dirtyRulesMap.value = {};
+    await fetchCustomData();
+    await loadSubscription({ preferredTab: "rules" });
+  } catch (error: any) {
+    ElMessage.error("删除失败: " + (error.response?.data?.message || error.message));
+  } finally {
+    isSubmittingRule.value = false;
+  }
+};
+
 const saveCustomRule = async () => {
   if (!newRuleForm.value.type || !newRuleForm.value.target) {
     ElMessage.warning("请补全规则类型和目标策略");
     return;
   }
-  if (newRuleForm.value.type !== "MATCH" && !newRuleForm.value.payload) {
+  const normalizedRuleType = normalizeRuleTypeForSubmit(newRuleForm.value.type).toUpperCase();
+  const normalizedPayload = normalizeRulePayloadForSubmit(newRuleForm.value.payload);
+  if (!["MATCH", "FINAL"].includes(normalizedRuleType) && normalizedPayload === "-") {
     ElMessage.warning("请输入匹配内容 (Payload)");
     return;
   }
@@ -2180,15 +2271,17 @@ const saveCustomRule = async () => {
     return;
   }
 
-  let submitData = { ...newRuleForm.value, profile_id: activeProfileId.value };
-  if (!submitData.payload) {
-    submitData.payload = "-";
-  }
+  const submitRule = buildRuleWritePayload(newRuleForm.value);
+  let submitData = { ...submitRule, profile_id: activeProfileId.value };
+  const originalIdentity = editingOriginalRuleIdentity.value;
+  const isReplacingRuleIdentity =
+    Boolean(originalIdentity) &&
+    getRuleIdentityKey(originalIdentity as RuleIdentity) !== getRuleIdentityKey(submitRule);
 
   isSubmittingRule.value = true;
   try {
     let res;
-    if (editingRuleId.value) {
+    if (editingRuleId.value && !isReplacingRuleIdentity) {
       res = await axios.put(
         buildBackendUrl(`/api/custom-rules/${editingRuleId.value}`),
         submitData
@@ -2200,10 +2293,24 @@ const saveCustomRule = async () => {
       );
     }
     if (res.data.code === 200) {
+      if (isReplacingRuleIdentity && originalIdentity) {
+        await persistRuleDeletions([
+          {
+            type: originalIdentity.type,
+            payload: originalIdentity.payload,
+            target: submitRule.target,
+          },
+        ]);
+      }
       ElMessage.success(
-        editingRuleId.value ? "规则更新成功！" : "规则已云端接管生效！"
+        isReplacingRuleIdentity
+          ? "规则已替换并同步删除旧规则！"
+          : editingRuleId.value
+            ? "规则更新成功！"
+            : "规则已云端接管生效！"
       );
       ruleDialogVisible.value = false;
+      editingOriginalRuleIdentity.value = null;
       await fetchCustomData();
       if (activeProfileId.value) {
         await loadSubscription({ preferredTab: "rules" });
@@ -2221,7 +2328,8 @@ const saveCustomRule = async () => {
 };
 
 const isCustomRule = (row: any) => {
-  return !!customRulesDict.value[getRuleIdentityKey(row)];
+  const customInfo = customRulesDict.value[getRuleIdentityKey(row)];
+  return !!customInfo && customInfo.Target !== deletedCustomRuleTarget;
 };
 
 // ---------------------- 个人中心 (修改密码与退出登录) ----------------------
@@ -3209,7 +3317,7 @@ const submitChangePassword = async () => {
                       </div>
                     </template>
                   </el-table-column>
-                  <el-table-column label="操作" width="120" fixed="right">
+                  <el-table-column label="操作" width="150" fixed="right">
                     <template #default="scope">
                       <div style="display: flex; gap: 4px">
                         <IconTooltipButton
@@ -3221,13 +3329,21 @@ const submitChangePassword = async () => {
                           @click="editRule(scope.row)"
                         />
                         <IconTooltipButton
-                          v-if="isCustomRule(scope.row)"
-                          label="移除接管（恢复原生）"
+                          label="删除规则"
                           type="danger"
                           link
                           size="small"
                           :icon="Delete"
-                          @click="deleteCustomRule(scope.row)"
+                          @click="deleteRule(scope.row)"
+                        />
+                        <IconTooltipButton
+                          v-if="isCustomRule(scope.row)"
+                          label="移除接管（恢复原生）"
+                          type="warning"
+                          link
+                          size="small"
+                          :icon="Refresh"
+                          @click="removeCustomRuleOverride(scope.row)"
                         />
                       </div>
                     </template>
