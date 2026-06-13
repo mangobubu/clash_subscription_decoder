@@ -1494,6 +1494,24 @@ const clearGroupProxies = () => {
   newGroupForm.value.proxies = [];
 };
 
+const isEnabledFlag = (value: unknown) =>
+  value === true ||
+  value === 1 ||
+  value === "1" ||
+  (typeof value === "string" && value.toLowerCase() === "true");
+
+const isShadowrocketBuiltinProxyGroup = (group: any) => {
+  const groupName = String(group?.name || group?.Name || "").trim();
+  if (!groupName) return false;
+  const customInfo = customGroupsDict.value[groupName];
+  if (!customInfo) return false;
+  return (
+    isEnabledFlag(customInfo.shadowrocket_use_builtin_proxy) ||
+    isEnabledFlag(customInfo.ShadowrocketUseBuiltinProxy) ||
+    isEnabledFlag(customInfo.shadowrocketUseBuiltinProxy)
+  );
+};
+
 const saveCustomGroup = async () => {
   if (!newGroupForm.value.name) {
     ElMessage.warning("请输入策略组名称");
@@ -2533,6 +2551,62 @@ const submitChangePassword = async () => {
 </script>
 
 <template>
+  <svg
+    class="iconfont-symbol-sprite"
+    aria-hidden="true"
+    focusable="false"
+    width="0"
+    height="0"
+  >
+    <defs>
+      <linearGradient
+        id="icon-shadowrocket-gradient"
+        x1="21"
+        y1="6"
+        x2="43"
+        y2="62"
+        gradientUnits="userSpaceOnUse"
+      >
+        <stop offset="0" stop-color="#4fc3f7" />
+        <stop offset="0.55" stop-color="#7c72ea" />
+        <stop offset="1" stop-color="#9b5de5" />
+      </linearGradient>
+    </defs>
+    <symbol id="icon-shadowrocket-logo" viewBox="0 0 64 64">
+      <path
+        fill="none"
+        stroke="url(#icon-shadowrocket-gradient)"
+        stroke-width="5.2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M32 6.5C22.2 13.8 17.6 26.7 19.2 41.1L10.4 43.8C11.2 35.2 14.1 29.5 19 26.6M45 26.6C49.9 29.5 52.8 35.2 53.6 43.8L44.8 41.1C46.4 26.7 41.8 13.8 32 6.5Z"
+      />
+      <path
+        fill="none"
+        stroke="url(#icon-shadowrocket-gradient)"
+        stroke-width="5.2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M24.8 41.8C26.8 48.2 37.2 48.2 39.2 41.8"
+      />
+      <circle
+        cx="32"
+        cy="25.2"
+        r="6.1"
+        fill="none"
+        stroke="url(#icon-shadowrocket-gradient)"
+        stroke-width="5.2"
+      />
+      <path
+        fill="none"
+        stroke="url(#icon-shadowrocket-gradient)"
+        stroke-width="5.2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M32 50.6C27.3 55.5 29.1 60 32 62.2C34.9 60 36.7 55.5 32 50.6Z"
+      />
+    </symbol>
+  </svg>
   <div v-if="isAppBootstrapping" class="app-bootstrap">
     <div class="bootstrap-shell">
       <header class="bootstrap-header glass-card">
@@ -3054,15 +3128,7 @@ const submitChangePassword = async () => {
                   @drop="handleSortDrop($event, 'groups', idx)"
                 >
                   <div class="group-card-header">
-                    <div
-                      style="
-                        display: flex;
-                        align-items: center;
-                        overflow: hidden;
-                        flex: 1;
-                        gap: 8px;
-                      "
-                    >
+                    <div class="group-card-main">
                       <span
                         class="drag-handle"
                         :class="{ disabled: isSavingGroupOrder }"
@@ -3081,6 +3147,17 @@ const submitChangePassword = async () => {
                         class="group-type-tag"
                         >{{ group.type }}</el-tag
                       >
+                      <span
+                        v-if="isShadowrocketBuiltinProxyGroup(group)"
+                        class="shadowrocket-badge"
+                        role="img"
+                        aria-label="Shadowrocket 映射为内置 PROXY"
+                        title="Shadowrocket 映射为内置 PROXY"
+                      >
+                        <svg class="iconfont iconfont-shadowrocket" aria-hidden="true">
+                          <use href="#icon-shadowrocket-logo" />
+                        </svg>
+                      </span>
                     </div>
                     <div class="custom-actions" style="display: flex; gap: 4px">
                       <IconTooltipButton
@@ -4304,6 +4381,13 @@ const submitChangePassword = async () => {
 </template>
 
 <style scoped>
+.iconfont-symbol-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
 /* 精美的版面自适应样式 */
 .app-container {
   max-width: 1200px;
@@ -5176,10 +5260,20 @@ const submitChangePassword = async () => {
   padding-bottom: 12px;
 }
 
+.group-card-main {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 8px;
+  overflow: hidden;
+}
+
 .group-name {
   font-size: 16px;
   font-weight: 600;
   color: var(--color-primary);
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5188,6 +5282,34 @@ const submitChangePassword = async () => {
 .group-type-tag {
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.shadowrocket-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(124, 114, 234, 0.36);
+  box-shadow:
+    0 8px 18px rgba(79, 195, 247, 0.14),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.68);
+}
+
+.iconfont-shadowrocket {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.group-card:hover .shadowrocket-badge {
+  border-color: rgba(79, 195, 247, 0.54);
+  box-shadow:
+    0 10px 24px rgba(124, 114, 234, 0.2),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.78);
 }
 
 .group-card-body {
