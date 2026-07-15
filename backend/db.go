@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -65,6 +66,11 @@ type Config struct {
 		CaptchaNoiseCount int    `toml:"captcha_noise_count"`
 		CaptchaNoiseColor string `toml:"captcha_noise_color"`
 	} `toml:"auth"`
+	SubscriptionFetch struct {
+		UserAgent          string `toml:"user_agent"`
+		ProxyURL           string `toml:"proxy_url"`
+		InsecureSkipVerify bool   `toml:"insecure_skip_verify"`
+	} `toml:"subscription_fetch"`
 }
 
 var DB *gorm.DB
@@ -229,6 +235,19 @@ func initDB() {
 	// 针对云原生部署：从环境变量读取并覆写验证码开关配置
 	if envCaptcha := os.Getenv("CAPTCHA_ENABLED"); envCaptcha != "" {
 		cfg.Auth.CaptchaEnabled = (envCaptcha == "true")
+	}
+
+	// 订阅抓取配置允许通过环境变量覆盖，便于容器部署时复用 Clash/Mihomo 出口。
+	if envUserAgent := os.Getenv("SUBSCRIPTION_USER_AGENT"); envUserAgent != "" {
+		cfg.SubscriptionFetch.UserAgent = envUserAgent
+	}
+	if envProxyURL := os.Getenv("SUBSCRIPTION_PROXY_URL"); envProxyURL != "" {
+		cfg.SubscriptionFetch.ProxyURL = envProxyURL
+	}
+	if envInsecureSkipVerify := os.Getenv("SUBSCRIPTION_INSECURE_SKIP_VERIFY"); envInsecureSkipVerify != "" {
+		if enabled, err := strconv.ParseBool(envInsecureSkipVerify); err == nil {
+			cfg.SubscriptionFetch.InsecureSkipVerify = enabled
+		}
 	}
 
 	AppConfig = cfg

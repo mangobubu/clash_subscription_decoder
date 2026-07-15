@@ -143,6 +143,11 @@ port = 5432
 sslmode = "disable"
 timezone = "Asia/Shanghai"
 
+[subscription_fetch]
+user_agent = "clash.meta"
+proxy_url = ""
+insecure_skip_verify = false
+
 [auth]
 captcha_enabled = true
 ```
@@ -155,6 +160,22 @@ go run main.go
 ```
 
 后端默认监听 `http://localhost:8080`。
+
+#### 上游订阅返回 403/404
+
+部分订阅服务会识别请求客户端。链接在 Clash/Mihomo 中可用、浏览器直接访问却返回 404，通常是服务商有意隐藏订阅内容，并不表示链接失效。后端可通过以下配置复用客户端标识和代理出口：
+
+- `user_agent` / `SUBSCRIPTION_USER_AGENT`：优先使用的上游请求 User-Agent。建议填写本地客户端实际标识，例如 `clash.meta`、`mihomo` 或 `clash-verge`。
+- `proxy_url` / `SUBSCRIPTION_PROXY_URL`：可选的上游抓取代理，支持 `http`、`https`、`socks5` 和 `socks5h`。
+- `insecure_skip_verify` / `SUBSCRIPTION_INSECURE_SKIP_VERIFY`：仅供自签名上游使用，默认必须保持 `false`。
+
+Docker Desktop 或配置了 `host-gateway` 的 Linux Docker 可使用宿主机 Clash HTTP 代理：
+
+```text
+SUBSCRIPTION_PROXY_URL=http://host.docker.internal:7890
+```
+
+请先确认 Clash 已开启“允许局域网连接”，且代理端口与实际配置一致。如果本项目部署在远程服务器，`host.docker.internal` 指向远程服务器宿主机，无法访问个人电脑上的 Clash；此时需要在服务器侧配置可用代理或 VPN 出口。
 
 ### 3. 前端开发环境
 

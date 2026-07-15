@@ -7,6 +7,7 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -707,7 +708,7 @@ func loadProfileSourceContents(profile SubscriptionProfile, fetcher profileConte
 
 		rawResponse, err := fetcher(targetURL)
 		if err != nil {
-			return nil, fmt.Errorf("抓取订阅源失败 [%s]: %w", targetURL, err)
+			return nil, fmt.Errorf("抓取订阅源失败 [%s]: %w", redactSubscriptionURL(targetURL), err)
 		}
 		plainContent, err := decodeSubscriptionPlainContent(rawResponse)
 		if err != nil {
@@ -3950,7 +3951,20 @@ func injectCustomRulesWithRules(yamlContent string, customRules []CustomRule) st
 	return string(out)
 }
 
-// fetchURLContent 获取指定 URL 的文本内容，支持内置测试 mock 地址拦截与多重高仿真抓取策略
+const defaultSubscriptionUserAgent = "clash.meta"
+
+type subscriptionFetchStrategy struct {
+	Name           string
+	UserAgent      string
+	BrowserHeaders bool
+}
+
+type subscriptionFetchFailure struct {
+	StatusCode int
+	Err        error
+}
+
+// fetchURLContent 获取指定 URL 的文本内容，支持内置测试 mock 地址拦截与多客户端抓取策略。
 func fetchURLContent(targetURL string) (string, error) {
 	// 针对本地 Mock URL 实施拦截，提供零成本快速体验
 	if strings.Contains(targetURL, "mock.clash.local/sub") {
@@ -3995,46 +4009,79 @@ rules:
 		return base64.StdEncoding.EncodeToString([]byte(mockYAML)), nil
 	}
 
-	// 极其关键：继承并读取系统全局代理，并忽略自签名证书与 IP 证书的 TLS 校验限制，保证与 Apifox 使用同一网络通道！
-	tr := &http.Transport{
-		Proxy: http.ProxyFromEnvironment, // 自动读取并遵循全局系统代理！
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-			Renegotiation:      tls.RenegotiateFreelyAsClient, // 关键破局：允许客户端进行 TLS 重新协商，完美契合服务端双向 TLS 握手！
+	client, err := newSubscriptionHTTPClient(
+		AppConfig.SubscriptionFetch.ProxyURL,
+		AppConfig.SubscriptionFetch.InsecureSkipVerify,
+	)
+	if err != nil {
+		return "", err
+	}
+	return fetchURLContentWithClient(targetURL, client, AppConfig.SubscriptionFetch.UserAgent)
+}
+
+func newSubscriptionHTTPClient(proxyURL string, insecureSkipVerify bool) (*http.Client, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyFromEnvironment
+
+	trimmedProxyURL := strings.TrimSpace(proxyURL)
+	if trimmedProxyURL != "" {
+		parsedProxyURL, err := url.Parse(trimmedProxyURL)
+		if err != nil || parsedProxyURL.Host == "" {
+			return nil, fmt.Errorf("订阅抓取代理地址无效，请检查 SUBSCRIPTION_PROXY_URL")
+		}
+		switch strings.ToLower(parsedProxyURL.Scheme) {
+		case "http", "https", "socks5", "socks5h":
+			transport.Proxy = http.ProxyURL(parsedProxyURL)
+		default:
+			return nil, fmt.Errorf("订阅抓取代理仅支持 http、https、socks5 或 socks5h 协议")
+		}
+	}
+
+	if insecureSkipVerify {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // 仅由显式配置开启，用于自签名上游。
+	}
+	return &http.Client{Timeout: 15 * time.Second, Transport: transport}, nil
+}
+
+func buildSubscriptionFetchStrategies(configuredUserAgent string) []subscriptionFetchStrategy {
+	configuredUserAgent = strings.TrimSpace(configuredUserAgent)
+	configuredName := "配置客户端"
+	if configuredUserAgent == "" {
+		configuredUserAgent = defaultSubscriptionUserAgent
+		configuredName = "默认 Clash.Meta"
+	}
+
+	candidates := []subscriptionFetchStrategy{
+		{Name: configuredName, UserAgent: configuredUserAgent},
+		{Name: "Clash.Meta", UserAgent: "clash.meta"},
+		{Name: "Mihomo", UserAgent: "mihomo"},
+		{Name: "Clash Verge", UserAgent: "clash-verge"},
+		{Name: "Clash for Windows", UserAgent: "ClashforWindows"},
+		{Name: "Clash", UserAgent: "clash"},
+		{Name: "v2rayN", UserAgent: "v2rayN"},
+		{
+			Name:           "Chrome 请求头",
+			UserAgent:      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+			BrowserHeaders: true,
 		},
 	}
-	client := &http.Client{
-		Timeout:   15 * time.Second,
-		Transport: tr,
+
+	strategies := make([]subscriptionFetchStrategy, 0, len(candidates))
+	seenUserAgents := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		key := strings.ToLower(candidate.UserAgent)
+		if seenUserAgents[key] {
+			continue
+		}
+		seenUserAgents[key] = true
+		strategies = append(strategies, candidate)
 	}
+	return strategies
+}
 
-	// 定义三种高拟真自适应策略，攻破各种防火墙和反代限制 (KISS + DRY 原则)
-	// 策略 1: 纯浏览器 UA + 默认 Host (带端口)
-	// 策略 2: Clash UA + 默认 Host (带端口)
-	// 策略 3: 纯浏览器 UA + 剥离端口号的 Host (防 Nginx/Laravel 反代 Host 匹配错误)
-	type Strategy struct {
-		Name        string
-		UA          string
-		UseBareHost bool
-		Minimal     bool
-	}
-
-	browserUA := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
-	strategies := []Strategy{
-		// 策略 0: 标准 Clash 原生请求头（优先级最高！因为这会诱导订阅转换面板直接吐出完整的 YAML 配置文件，而不是 Base64 节点列表）
-		{Name: "Clash原生", UA: "clash", UseBareHost: false, Minimal: true},
-		// 策略 1: 极其精简的 curl 模拟（如果 clash 被墙或面板强制下发 Base64，我们退而求其次）
-		{Name: "Curl原生", UA: "curl/7.88.1", UseBareHost: false, Minimal: true},
-		// 策略 2: v2rayN 原生请求头
-		{Name: "v2rayN原生", UA: "v2rayN/6.23", UseBareHost: false, Minimal: true},
-		// 策略 3: 浏览器高拟真伪装
-		{Name: "Chrome高拟真", UA: browserUA, UseBareHost: false, Minimal: false},
-		// 策略 4: 浏览器伪装 + 剥离端口（针对特定 Nginx 反代）
-		{Name: "Chrome剥离端口", UA: browserUA, UseBareHost: true, Minimal: false},
-	}
-
-	var lastErr error
+func fetchURLContentWithClient(targetURL string, client *http.Client, configuredUserAgent string) (string, error) {
+	strategies := buildSubscriptionFetchStrategies(configuredUserAgent)
+	failures := make([]subscriptionFetchFailure, 0, len(strategies))
 	var bestCandidate subscriptionFetchCandidate
 	for i, strategy := range strategies {
 		req, err := http.NewRequest("GET", targetURL, nil)
@@ -4042,65 +4089,43 @@ rules:
 			return "", fmt.Errorf("创建请求失败: %w", err)
 		}
 
-		if strategy.Minimal {
-			// 极简模式：只发送 UA 和 Accept，完美模拟 CLI 工具
-			req.Header.Set("User-Agent", strategy.UA)
-			req.Header.Set("Accept", "*/*")
-		} else {
-			// 注入全套高仿真 Chrome 浏览器 Header 与 Sec-Metadata，完美破解 Laravel/Nginx 防爬虫的 404/403 路由屏蔽机制
+		req.Header.Set("User-Agent", strategy.UserAgent)
+		req.Header.Set("Accept", "*/*")
+		if strategy.BrowserHeaders {
 			req.Header.Set("Connection", "keep-alive")
 			req.Header.Set("Upgrade-Insecure-Requests", "1")
-			req.Header.Set("User-Agent", strategy.UA)
 			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
 			req.Header.Set("Sec-Fetch-Site", "none")
 			req.Header.Set("Sec-Fetch-Mode", "navigate")
 			req.Header.Set("Sec-Fetch-User", "?1")
 			req.Header.Set("Sec-Fetch-Dest", "document")
-			req.Header.Set("Sec-Ch-Ua", `"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`)
+			req.Header.Set("Sec-Ch-Ua", `"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`)
 			req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
 			req.Header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
 			req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 			req.Header.Set("Cache-Control", "no-cache")
 		}
 
-		// 如果开启了 UseBareHost，将 Host 请求头重设为剥离了非标准端口（如 :1000）的主机名，防止 Web 服务因端口名匹配不到虚拟主机而 404
-		if strategy.UseBareHost {
-			host := req.URL.Host
-			if pos := strings.Index(host, ":"); pos != -1 {
-				req.Host = host[:pos]
-			} else {
-				req.Host = host
-			}
-		}
-
 		resp, err := client.Do(req)
 		if err != nil {
-			lastErr = fmt.Errorf("[策略: %s] 请求网络失败: %w", strategy.Name, err)
-			log.Printf("[Clash Subscription Decoder 后端诊断] 尝试 %d (%s) 失败，请求网络出错: %v", i+1, strategy.Name, err)
+			safeErr := redactSubscriptionRequestError(err)
+			failures = append(failures, subscriptionFetchFailure{Err: safeErr})
+			log.Printf("[订阅抓取] 尝试=%d 策略=%s 结果=网络错误 错误=%v", i+1, strategy.Name, safeErr)
 			continue
 		}
 
 		bodyBytes, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		// 极其关键的控制台实时排错日志 (AIR 中直观展示)
-		log.Printf("=================== [Clash Subscription Decoder 诊断请求 %d - %s] ===================", i+1, strategy.Name)
-		log.Printf("请求 URL: %s", targetURL)
-		log.Printf("请求 UA  : %s", strategy.UA)
-		log.Printf("请求 Host: %s (原 URL.Host: %s)", req.Host, req.URL.Host)
-		log.Printf("响应状态码: %d", resp.StatusCode)
-		log.Printf("响应 Headers: %v", resp.Header)
-		log.Printf("响应 Body 预览 (前300字): %s", truncateString(string(bodyBytes), 300))
-		log.Printf("==========================================================================")
-
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("[策略: %s] 服务器返回状态码 %d (内容: %s)",
-				strategy.Name, resp.StatusCode, truncateString(string(bodyBytes), 80))
+		if err != nil {
+			failures = append(failures, subscriptionFetchFailure{Err: err})
+			log.Printf("[订阅抓取] 尝试=%d 策略=%s 状态码=%d 结果=读取失败", i+1, strategy.Name, resp.StatusCode)
 			continue
 		}
 
-		if err != nil {
-			lastErr = fmt.Errorf("[策略: %s] 读取响应体失败: %w", strategy.Name, err)
+		log.Printf("[订阅抓取] 尝试=%d 策略=%s 地址=%s 状态码=%d", i+1, strategy.Name, redactSubscriptionURL(targetURL), resp.StatusCode)
+		if resp.StatusCode != http.StatusOK {
+			failures = append(failures, subscriptionFetchFailure{StatusCode: resp.StatusCode})
 			continue
 		}
 
@@ -4118,15 +4143,63 @@ rules:
 		return bestCandidate.Body, nil
 	}
 
-	return "", fmt.Errorf("多重自适应策略抓取均告失败。最后报错: %w", lastErr)
+	return "", newSubscriptionFetchError(failures)
 }
 
-// 辅助函数，用于截断 UA 输出便于排错
-func truncateUA(ua string, limit int) string {
-	if len(ua) <= limit {
-		return ua
+func newSubscriptionFetchError(failures []subscriptionFetchFailure) error {
+	statusCodes := make([]string, 0)
+	seenStatusCodes := make(map[int]bool)
+	hasForbidden := false
+	hasNotFound := false
+	var lastErr error
+	for _, failure := range failures {
+		if failure.StatusCode > 0 && !seenStatusCodes[failure.StatusCode] {
+			seenStatusCodes[failure.StatusCode] = true
+			statusCodes = append(statusCodes, strconv.Itoa(failure.StatusCode))
+		}
+		hasForbidden = hasForbidden || failure.StatusCode == http.StatusForbidden
+		hasNotFound = hasNotFound || failure.StatusCode == http.StatusNotFound
+		if failure.Err != nil {
+			lastErr = failure.Err
+		}
 	}
-	return ua[:limit] + "..."
+
+	statusSummary := strings.Join(statusCodes, "/")
+	if hasForbidden {
+		return fmt.Errorf("上游订阅服务拒绝请求（HTTP %s）。请将 SUBSCRIPTION_USER_AGENT 设置为本地客户端实际标识，并确认后端通过 SUBSCRIPTION_PROXY_URL 使用可用出口", statusSummary)
+	}
+	if hasNotFound {
+		return fmt.Errorf("上游订阅地址返回 HTTP %s。若浏览器访问为 404 但 Clash 可用，通常是服务商限制了客户端标识，请配置 SUBSCRIPTION_USER_AGENT", statusSummary)
+	}
+	if statusSummary != "" {
+		return fmt.Errorf("上游订阅服务返回异常状态码 %s", statusSummary)
+	}
+	if lastErr != nil {
+		return fmt.Errorf("订阅抓取失败: %w", lastErr)
+	}
+	return fmt.Errorf("所有订阅抓取策略均未返回有效内容")
+}
+
+func redactSubscriptionURL(rawURL string) string {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return "[无效订阅地址]"
+	}
+	parsedURL.User = nil
+	query := parsedURL.Query()
+	for key := range query {
+		query.Set(key, "REDACTED")
+	}
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String()
+}
+
+func redactSubscriptionRequestError(err error) error {
+	var requestErr *url.Error
+	if !errors.As(err, &requestErr) {
+		return err
+	}
+	return fmt.Errorf("%s %s: %w", requestErr.Op, redactSubscriptionURL(requestErr.URL), requestErr.Err)
 }
 
 const preferredSubscriptionNodeCount = 20

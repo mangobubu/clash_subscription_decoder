@@ -143,6 +143,11 @@ port = 5432
 sslmode = "disable"
 timezone = "Asia/Shanghai"
 
+[subscription_fetch]
+user_agent = "clash.meta"
+proxy_url = ""
+insecure_skip_verify = false
+
 [auth]
 captcha_enabled = true
 ```
@@ -155,6 +160,22 @@ go run main.go
 ```
 
 The backend listens on `http://localhost:8080` by default.
+
+#### Upstream subscription returns 403/404
+
+Some subscription providers identify the requesting client. If a URL works in Clash/Mihomo but returns 404 in a browser, the provider is usually hiding subscription content intentionally; this does not mean the URL is invalid. Configure the backend to reuse the client identity and proxy route:
+
+- `user_agent` / `SUBSCRIPTION_USER_AGENT`: preferred User-Agent for upstream requests, such as `clash.meta`, `mihomo`, or `clash-verge`.
+- `proxy_url` / `SUBSCRIPTION_PROXY_URL`: optional upstream proxy supporting `http`, `https`, `socks5`, and `socks5h`.
+- `insecure_skip_verify` / `SUBSCRIPTION_INSECURE_SKIP_VERIFY`: only for self-signed upstream certificates; keep it `false` by default.
+
+Docker Desktop, or Linux Docker configured with `host-gateway`, can reach a Clash HTTP proxy on the host with:
+
+```text
+SUBSCRIPTION_PROXY_URL=http://host.docker.internal:7890
+```
+
+Ensure Clash allows LAN connections and that the configured port is correct. For a remote deployment, `host.docker.internal` refers to the remote Docker host and cannot reach Clash running on a personal computer; configure a server-side proxy or VPN egress instead.
 
 ### 3. Frontend Development
 
