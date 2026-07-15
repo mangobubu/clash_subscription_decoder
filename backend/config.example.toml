@@ -14,7 +14,11 @@ timezone = "Asia/Shanghai"
 [subscription_fetch]
 # 上游服务限制客户端类型时，填写本地 Clash/Mihomo 实际使用的 User-Agent
 user_agent = "clash.meta"
-# 可选：让后端抓取流量经过指定代理，支持 http、https、socks5 和 socks5h
+# 是否使用代理池抓取远程订阅；关闭时明确直连，不读取系统 HTTP_PROXY
+proxy_enabled = false
+# 可选代理池；无协议前缀按 HTTP 代理处理
+proxy_urls = []
+# 旧版单代理配置仍受支持；未显式配置 proxy_enabled 时，非空值会自动启用代理
 # Docker Desktop 访问宿主机 Clash 的示例：http://host.docker.internal:7890
 proxy_url = ""
 # 仅在上游确实使用自签名证书时开启；默认必须校验证书

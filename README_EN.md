@@ -166,13 +166,26 @@ The backend listens on `http://localhost:8080` by default.
 Some subscription providers identify the requesting client. If a URL works in Clash/Mihomo but returns 404 in a browser, the provider is usually hiding subscription content intentionally; this does not mean the URL is invalid. Configure the backend to reuse the client identity and proxy route:
 
 - `user_agent` / `SUBSCRIPTION_USER_AGENT`: preferred User-Agent for upstream requests, such as `clash.meta`, `mihomo`, or `clash-verge`.
-- `proxy_url` / `SUBSCRIPTION_PROXY_URL`: optional upstream proxy supporting `http`, `https`, `socks5`, and `socks5h`.
+- **Proxy Pool Settings** in the signed-in user menu: enable or disable proxied fetching at runtime and maintain one proxy per line. Database-backed UI settings take precedence over startup defaults after they are saved.
+- `proxy_enabled` / `SUBSCRIPTION_PROXY_ENABLED`: controls whether the proxy pool is used. When disabled, subscription fetching connects directly and ignores the process-level `HTTP_PROXY`.
+- `proxy_urls` / `SUBSCRIPTION_PROXY_URLS`: optional proxy pool. The environment variable accepts comma-, semicolon-, or newline-separated entries. Each fetch starts at a rotating position and tries at most five exits after failures.
+- `proxy_url` / `SUBSCRIPTION_PROXY_URL`: legacy single-proxy setting. A non-empty legacy value enables proxying when the new switch is not explicitly configured.
 - `insecure_skip_verify` / `SUBSCRIPTION_INSECURE_SKIP_VERIFY`: only for self-signed upstream certificates; keep it `false` by default.
+
+The proxy pool accepts the following formats. Entries without a scheme are treated as HTTP proxies; explicit schemes may be `http`, `https`, `socks5`, or `socks5h`:
+
+```text
+hostname:port:username:password
+socks5://username:password@host:port
+username:password@hostname:port
+hostname:port@username:password
+```
 
 Docker Desktop, or Linux Docker configured with `host-gateway`, can reach a Clash HTTP proxy on the host with:
 
 ```text
-SUBSCRIPTION_PROXY_URL=http://host.docker.internal:7890
+SUBSCRIPTION_PROXY_ENABLED=true
+SUBSCRIPTION_PROXY_URLS=http://host.docker.internal:7890
 ```
 
 Ensure Clash allows LAN connections and that the configured port is correct. For a remote deployment, `host.docker.internal` refers to the remote Docker host and cannot reach Clash running on a personal computer; configure a server-side proxy or VPN egress instead.

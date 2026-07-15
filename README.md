@@ -166,13 +166,26 @@ go run main.go
 部分订阅服务会识别请求客户端。链接在 Clash/Mihomo 中可用、浏览器直接访问却返回 404，通常是服务商有意隐藏订阅内容，并不表示链接失效。后端可通过以下配置复用客户端标识和代理出口：
 
 - `user_agent` / `SUBSCRIPTION_USER_AGENT`：优先使用的上游请求 User-Agent。建议填写本地客户端实际标识，例如 `clash.meta`、`mihomo` 或 `clash-verge`。
-- `proxy_url` / `SUBSCRIPTION_PROXY_URL`：可选的上游抓取代理，支持 `http`、`https`、`socks5` 和 `socks5h`。
+- 登录后的“代理池设置”：可随时开启或关闭代理抓取，并按一行一个维护代理；界面设置保存到数据库后优先于启动配置。
+- `proxy_enabled` / `SUBSCRIPTION_PROXY_ENABLED`：是否使用代理池。关闭时订阅抓取明确直连，不读取进程中的 `HTTP_PROXY`。
+- `proxy_urls` / `SUBSCRIPTION_PROXY_URLS`：可选代理池。环境变量支持逗号、分号或换行分隔；每次抓取从轮询起点开始，失败时最多尝试 5 个出口。
+- `proxy_url` / `SUBSCRIPTION_PROXY_URL`：兼容旧版的单代理配置；未显式设置新开关时，非空的旧配置会自动启用代理。
 - `insecure_skip_verify` / `SUBSCRIPTION_INSECURE_SKIP_VERIFY`：仅供自签名上游使用，默认必须保持 `false`。
+
+代理池支持以下写法；无协议前缀统一按 HTTP 代理处理，显式协议支持 `http`、`https`、`socks5` 和 `socks5h`：
+
+```text
+hostname:port:username:password
+socks5://username:password@host:port
+username:password@hostname:port
+hostname:port@username:password
+```
 
 Docker Desktop 或配置了 `host-gateway` 的 Linux Docker 可使用宿主机 Clash HTTP 代理：
 
 ```text
-SUBSCRIPTION_PROXY_URL=http://host.docker.internal:7890
+SUBSCRIPTION_PROXY_ENABLED=true
+SUBSCRIPTION_PROXY_URLS=http://host.docker.internal:7890
 ```
 
 请先确认 Clash 已开启“允许局域网连接”，且代理端口与实际配置一致。如果本项目部署在远程服务器，`host.docker.internal` 指向远程服务器宿主机，无法访问个人电脑上的 Clash；此时需要在服务器侧配置可用代理或 VPN 出口。

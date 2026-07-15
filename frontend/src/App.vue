@@ -18,6 +18,7 @@ import {
   Download,
   Upload,
   Lock,
+  Setting,
   Promotion,
   Remove,
   SwitchButton,
@@ -627,6 +628,8 @@ const loadInitialAppData = async () => {
 
 onMounted(async () => {
   window.addEventListener('auth-failed', () => {
+    clearProxySettingsState();
+    proxySettingsVisible.value = false;
     isLoggedIn.value = false;
     isInitialDataLoading.value = false;
   });
@@ -2363,7 +2366,89 @@ const isCustomRule = (row: any) => {
   return !!customInfo && customInfo.Target !== deletedCustomRuleTarget;
 };
 
-// ---------------------- 个人中心 (修改密码与退出登录) ----------------------
+// ---------------------- 个人中心 (代理设置、修改密码与退出登录) ----------------------
+interface SubscriptionFetchSettings {
+  proxy_enabled: boolean;
+  proxy_pool: string;
+}
+
+const proxySettingsVisible = ref(false);
+const isLoadingProxySettings = ref(false);
+const isSavingProxySettings = ref(false);
+const proxySettingsForm = ref<SubscriptionFetchSettings>({
+  proxy_enabled: false,
+  proxy_pool: "",
+});
+let proxySettingsLoadRequestId = 0;
+
+const resetProxySettingsForm = () => {
+  proxySettingsForm.value = {
+    proxy_enabled: false,
+    proxy_pool: "",
+  };
+};
+
+const clearProxySettingsState = () => {
+  proxySettingsLoadRequestId += 1;
+  isLoadingProxySettings.value = false;
+  isSavingProxySettings.value = false;
+  resetProxySettingsForm();
+};
+
+const openProxySettings = async () => {
+  const requestId = ++proxySettingsLoadRequestId;
+  resetProxySettingsForm();
+  proxySettingsVisible.value = true;
+  isLoadingProxySettings.value = true;
+  try {
+    const res = await axios.get(buildBackendUrl("/api/subscription-fetch-settings"));
+    if (requestId !== proxySettingsLoadRequestId) return;
+    if (res.data.code !== 200) {
+      throw new Error(res.data.message || "获取代理池设置失败");
+    }
+    const settings = res.data.data || {};
+    proxySettingsForm.value = {
+      proxy_enabled: Boolean(settings.proxy_enabled),
+      proxy_pool: typeof settings.proxy_pool === "string" ? settings.proxy_pool : "",
+    };
+  } catch (error: any) {
+    if (requestId !== proxySettingsLoadRequestId) return;
+    proxySettingsVisible.value = false;
+    ElMessage.error(error.response?.data?.message || error.message || "获取代理池设置失败");
+  } finally {
+    if (requestId === proxySettingsLoadRequestId) {
+      isLoadingProxySettings.value = false;
+    }
+  }
+};
+
+const saveProxySettings = async () => {
+  const proxyPool = proxySettingsForm.value.proxy_pool.trim();
+  if (proxySettingsForm.value.proxy_enabled && !proxyPool) {
+    ElMessage.warning("开启代理抓取后，请至少填写一个代理");
+    return;
+  }
+
+  isSavingProxySettings.value = true;
+  try {
+    const payload: SubscriptionFetchSettings = {
+      proxy_enabled: proxySettingsForm.value.proxy_enabled,
+      proxy_pool: proxyPool,
+    };
+    const res = await axios.put(buildBackendUrl("/api/subscription-fetch-settings"), payload);
+    if (res.data.code !== 200) {
+      throw new Error(res.data.message || "保存代理池设置失败");
+    }
+    proxySettingsForm.value = payload;
+    proxySettingsVisible.value = false;
+    ElMessage.success("代理池设置已保存");
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || error.message || "保存代理池设置失败");
+  } finally {
+    isSavingProxySettings.value = false;
+  }
+};
+
 const changePasswordVisible = ref(false);
 const isChangingPassword = ref(false);
 const passwordFormRef = ref<any>(null);
@@ -2459,6 +2544,8 @@ const handleUserCommand = async (command: string) => {
       }
       
       localStorage.removeItem("token");
+      clearProxySettingsState();
+      proxySettingsVisible.value = false;
       isLoggedIn.value = false;
       ElMessage.success("已成功退出登录");
     } catch {
@@ -2474,6 +2561,8 @@ const handleUserCommand = async (command: string) => {
     if (passwordFormRef.value) {
       passwordFormRef.value.resetFields();
     }
+  } else if (command === "proxySettings") {
+    await openProxySettings();
   } else if (command === "backupData") {
     try {
       const res = await axios.get(buildBackendUrl("/api/backup"), {
@@ -2671,7 +2760,8 @@ const submitChangePassword = async () => {
             <el-dropdown-menu>
               <el-dropdown-item command="backupData" :icon="Download">备份数据</el-dropdown-item>
               <el-dropdown-item command="importData" :icon="Upload">导入备份</el-dropdown-item>
-              <el-dropdown-item divided command="changePassword" :icon="Lock">修改密码</el-dropdown-item>
+              <el-dropdown-item divided command="proxySettings" :icon="Setting">代理池设置</el-dropdown-item>
+              <el-dropdown-item command="changePassword" :icon="Lock">修改密码</el-dropdown-item>
               <el-dropdown-item divided command="logout" :icon="SwitchButton">退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -3624,7 +3714,8 @@ const submitChangePassword = async () => {
               </el-dropdown-item>
               <el-dropdown-item divided command="backupData">备份数据</el-dropdown-item>
               <el-dropdown-item command="importData">导入备份</el-dropdown-item>
-              <el-dropdown-item divided command="changePassword">修改密码</el-dropdown-item>
+              <el-dropdown-item divided command="proxySettings">代理池设置</el-dropdown-item>
+              <el-dropdown-item command="changePassword">修改密码</el-dropdown-item>
               <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -4325,6 +4416,74 @@ const submitChangePassword = async () => {
         Element Plus.
       </p>
     </footer>
+
+    <!-- 订阅抓取代理池设置 -->
+    <el-dialog
+      v-model="proxySettingsVisible"
+      title="订阅抓取代理池"
+      width="680px"
+      align-center
+      class="glass-dialog"
+      :close-on-click-modal="!isLoadingProxySettings && !isSavingProxySettings"
+      :close-on-press-escape="!isLoadingProxySettings && !isSavingProxySettings"
+      :show-close="!isLoadingProxySettings && !isSavingProxySettings"
+      @closed="clearProxySettingsState"
+    >
+      <div v-loading="isLoadingProxySettings" class="proxy-settings-content">
+        <el-form label-position="top">
+          <el-form-item label="是否使用代理抓取订阅">
+            <div class="proxy-switch-row">
+              <el-switch
+                v-model="proxySettingsForm.proxy_enabled"
+                active-text="已开启"
+                inactive-text="未开启"
+                :disabled="isLoadingProxySettings || isSavingProxySettings"
+              />
+              <span>开启后，系统会从代理池中选择出口拉取远程订阅。</span>
+            </div>
+          </el-form-item>
+
+          <el-form-item label="代理池（一行一个）">
+            <el-input
+              v-model="proxySettingsForm.proxy_pool"
+              type="textarea"
+              :rows="8"
+              resize="vertical"
+              autocomplete="off"
+              autocapitalize="off"
+              autocorrect="off"
+              :spellcheck="false"
+              :disabled="!proxySettingsForm.proxy_enabled || isLoadingProxySettings || isSavingProxySettings"
+              placeholder="hostname:port:username:password&#10;socks5://username:password@host:port"
+            />
+            <div class="proxy-format-help">
+              <p>支持以下四种格式；未填写 <code>socks5://</code> 协议前缀时按 HTTP 代理处理。</p>
+              <code>hostname:port:username:password</code>
+              <code>socks5://username:password@host:port</code>
+              <code>username:password@hostname:port</code>
+              <code>hostname:port@username:password</code>
+            </div>
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button
+          plain
+          :disabled="isLoadingProxySettings || isSavingProxySettings"
+          @click="proxySettingsVisible = false"
+        >
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="isSavingProxySettings"
+          :disabled="isLoadingProxySettings"
+          @click="saveProxySettings"
+        >
+          保存设置
+        </el-button>
+      </template>
+    </el-dialog>
 
     <!-- 修改密码对话框 -->
     <el-dialog
@@ -5776,6 +5935,48 @@ const submitChangePassword = async () => {
   border-top-color: rgba(255, 255, 255, 0.05) !important;
 }
 
+.proxy-settings-content {
+  min-height: 330px;
+}
+
+.proxy-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+}
+
+.proxy-switch-row span {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.proxy-format-help {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  margin-top: 10px;
+  padding-left: 12px;
+  border-left: 3px solid rgba(56, 189, 248, 0.45);
+  color: var(--text-secondary);
+}
+
+.proxy-format-help p {
+  margin: 0 0 2px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.proxy-format-help code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: #bae6fd;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 /* 专业控制台响应式改版覆盖层 */
 .icon-action-row,
 .dialog-icon-actions {
@@ -6361,6 +6562,16 @@ const submitChangePassword = async () => {
 
   :deep(.glass-dialog .el-dialog__footer .el-button) {
     min-height: 40px;
+  }
+
+  .proxy-settings-content {
+    min-height: 390px;
+  }
+
+  .proxy-switch-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
   }
 }
 </style>

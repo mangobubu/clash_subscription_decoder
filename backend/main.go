@@ -13,12 +13,14 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -29,6 +31,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 //go:embed dist
@@ -81,6 +84,8 @@ func main() {
 	api.GET("/verify", handleVerify)
 	api.POST("/logout", handleLogout)
 	api.POST("/change-password", handleChangePassword)
+	api.GET("/subscription-fetch-settings", handleGetSubscriptionFetchSettings)
+	api.PUT("/subscription-fetch-settings", handleUpdateSubscriptionFetchSettings)
 	api.GET("/sub-token", handleGetSubToken)
 	api.POST("/generate-sub-token", handleGenerateSubToken)
 
@@ -427,6 +432,92 @@ func handleChangePassword(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "密码修改成功，请使用新密码重新登录"})
 }
 
+type subscriptionFetchSettingsRequest struct {
+	ProxyEnabled bool   `json:"proxy_enabled"`
+	ProxyPool    string `json:"proxy_pool"`
+}
+
+func resolveSubscriptionFetchSetting() (SubscriptionFetchSetting, error) {
+	var setting SubscriptionFetchSetting
+	err := DB.First(&setting, 1).Error
+	if err == nil {
+		return setting, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return SubscriptionFetchSetting{}, err
+	}
+	return SubscriptionFetchSetting{
+		ProxyEnabled: AppConfig.SubscriptionFetch.ProxyEnabled,
+		ProxyPool:    configuredSubscriptionProxyPool(AppConfig),
+	}, nil
+}
+
+func handleGetSubscriptionFetchSettings(c *gin.Context) {
+	setting, err := resolveSubscriptionFetchSetting()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取订阅代理设置失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"data": gin.H{
+			"proxy_enabled": setting.ProxyEnabled,
+			"proxy_pool":    setting.ProxyPool,
+		},
+	})
+}
+
+func handleUpdateSubscriptionFetchSettings(c *gin.Context) {
+	var req subscriptionFetchSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
+		return
+	}
+
+	rawProxyPool := strings.TrimSpace(req.ProxyPool)
+	if len(rawProxyPool) > maxSubscriptionProxyPoolLength {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "代理池内容过长"})
+		return
+	}
+	proxies, parseErr := parseSubscriptionProxyPool(rawProxyPool)
+	if parseErr != nil && req.ProxyEnabled {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": parseErr.Error()})
+		return
+	}
+	if req.ProxyEnabled && len(proxies) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "开启代理后，请至少填写一个有效代理"})
+		return
+	}
+
+	// 关闭时允许保留旧版遗留文本，确保非标准旧配置也能被立即停用。
+	normalizedProxyPool := rawProxyPool
+	if parseErr == nil {
+		normalizedProxyURLs := make([]string, 0, len(proxies))
+		for _, proxy := range proxies {
+			normalizedProxyURLs = append(normalizedProxyURLs, proxy.URL)
+		}
+		normalizedProxyPool = strings.Join(normalizedProxyURLs, "\n")
+	}
+	setting := SubscriptionFetchSetting{
+		ID:           1,
+		ProxyEnabled: req.ProxyEnabled,
+		ProxyPool:    normalizedProxyPool,
+	}
+	if err := DB.Session(&gorm.Session{Logger: logger.Discard}).Save(&setting).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存订阅代理设置失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "订阅代理设置已保存",
+		"data": gin.H{
+			"proxy_enabled": setting.ProxyEnabled,
+			"proxy_pool":    setting.ProxyPool,
+		},
+	})
+}
+
 type profileWriteRequest struct {
 	Name         string                      `json:"name" binding:"required"`
 	SourceType   string                      `json:"source_type" binding:"required"`
@@ -712,7 +803,7 @@ func loadProfileSourceContents(profile SubscriptionProfile, fetcher profileConte
 		}
 		plainContent, err := decodeSubscriptionPlainContent(rawResponse)
 		if err != nil {
-			return nil, fmt.Errorf("解析订阅源失败 [%s]: %w", targetURL, err)
+			return nil, fmt.Errorf("解析订阅源失败 [%s]: %w", redactSubscriptionURL(targetURL), err)
 		}
 		contents = append(contents, subscriptionSourceContent{
 			Source: source,
@@ -3953,6 +4044,15 @@ func injectCustomRulesWithRules(yamlContent string, customRules []CustomRule) st
 
 const defaultSubscriptionUserAgent = "clash.meta"
 
+const (
+	maxSubscriptionProxyPoolEntries = 200
+	maxSubscriptionProxyLineLength  = 2048
+	maxSubscriptionProxyPoolLength  = maxSubscriptionProxyPoolEntries * (maxSubscriptionProxyLineLength + 1)
+	maxSubscriptionProxyAttempts    = 5
+)
+
+var subscriptionProxyCursor atomic.Uint64
+
 type subscriptionFetchStrategy struct {
 	Name           string
 	UserAgent      string
@@ -3962,6 +4062,14 @@ type subscriptionFetchStrategy struct {
 type subscriptionFetchFailure struct {
 	StatusCode int
 	Err        error
+}
+
+type subscriptionFetchError struct {
+	Failures []subscriptionFetchFailure
+}
+
+type subscriptionProxyEndpoint struct {
+	URL string
 }
 
 // fetchURLContent 获取指定 URL 的文本内容，支持内置测试 mock 地址拦截与多客户端抓取策略。
@@ -4009,19 +4117,38 @@ rules:
 		return base64.StdEncoding.EncodeToString([]byte(mockYAML)), nil
 	}
 
-	client, err := newSubscriptionHTTPClient(
-		AppConfig.SubscriptionFetch.ProxyURL,
-		AppConfig.SubscriptionFetch.InsecureSkipVerify,
-	)
+	setting, err := resolveSubscriptionFetchSetting()
+	if err != nil {
+		return "", fmt.Errorf("读取订阅代理设置失败: %w", err)
+	}
+	if !setting.ProxyEnabled {
+		client, err := newSubscriptionHTTPClient("", AppConfig.SubscriptionFetch.InsecureSkipVerify)
+		if err != nil {
+			return "", err
+		}
+		defer client.CloseIdleConnections()
+		return fetchURLContentWithClient(targetURL, client, AppConfig.SubscriptionFetch.UserAgent)
+	}
+
+	proxies, err := parseSubscriptionProxyPool(setting.ProxyPool)
 	if err != nil {
 		return "", err
 	}
-	return fetchURLContentWithClient(targetURL, client, AppConfig.SubscriptionFetch.UserAgent)
+	if len(proxies) == 0 {
+		return "", fmt.Errorf("订阅代理已开启，但代理池为空")
+	}
+	return fetchURLContentWithProxyPool(
+		targetURL,
+		proxies,
+		AppConfig.SubscriptionFetch.UserAgent,
+		AppConfig.SubscriptionFetch.InsecureSkipVerify,
+	)
 }
 
 func newSubscriptionHTTPClient(proxyURL string, insecureSkipVerify bool) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = http.ProxyFromEnvironment
+	// 未启用代理时必须明确直连，避免 HTTP_PROXY 等进程环境变量绕过界面开关。
+	transport.Proxy = nil
 
 	trimmedProxyURL := strings.TrimSpace(proxyURL)
 	if trimmedProxyURL != "" {
@@ -4041,6 +4168,196 @@ func newSubscriptionHTTPClient(proxyURL string, insecureSkipVerify bool) (*http.
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // 仅由显式配置开启，用于自签名上游。
 	}
 	return &http.Client{Timeout: 15 * time.Second, Transport: transport}, nil
+}
+
+func parseSubscriptionProxyPool(rawPool string) ([]subscriptionProxyEndpoint, error) {
+	lines := strings.Split(strings.ReplaceAll(rawPool, "\r\n", "\n"), "\n")
+	proxies := make([]subscriptionProxyEndpoint, 0, len(lines))
+	seen := make(map[string]bool, len(lines))
+	for lineIndex, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		if len(line) > maxSubscriptionProxyLineLength {
+			return nil, fmt.Errorf("代理池第 %d 行过长", lineIndex+1)
+		}
+		normalizedURL, err := normalizeSubscriptionProxyURL(line)
+		if err != nil {
+			return nil, fmt.Errorf("代理池第 %d 行格式无效：%w", lineIndex+1, err)
+		}
+		if seen[normalizedURL] {
+			continue
+		}
+		if len(proxies) >= maxSubscriptionProxyPoolEntries {
+			return nil, fmt.Errorf("代理池最多允许 %d 个代理", maxSubscriptionProxyPoolEntries)
+		}
+		seen[normalizedURL] = true
+		proxies = append(proxies, subscriptionProxyEndpoint{URL: normalizedURL})
+	}
+	return proxies, nil
+}
+
+func normalizeSubscriptionProxyURL(rawProxy string) (string, error) {
+	value := strings.TrimSpace(rawProxy)
+	if value == "" {
+		return "", fmt.Errorf("代理地址不能为空")
+	}
+	if strings.Contains(value, "://") {
+		return normalizeExplicitSubscriptionProxyURL(value)
+	}
+
+	// hostname:port:username:password
+	parts := strings.SplitN(value, ":", 4)
+	if len(parts) == 4 && !strings.Contains(parts[0], "@") {
+		if hostPort, err := buildSubscriptionProxyHostPort(parts[0], parts[1]); err == nil {
+			return buildSubscriptionProxyURL("http", hostPort, parts[2], parts[3])
+		}
+	}
+
+	if strings.Count(value, "@") == 1 {
+		left, right, _ := strings.Cut(value, "@")
+		// username:password@hostname:port
+		if hostPort, hostErr := parseSubscriptionProxyHostPort(right); hostErr == nil {
+			if username, password, credentialErr := parseSubscriptionProxyCredentials(left); credentialErr == nil {
+				return buildSubscriptionProxyURL("http", hostPort, username, password)
+			}
+		}
+		// hostname:port@username:password
+		if hostPort, hostErr := parseSubscriptionProxyHostPort(left); hostErr == nil {
+			if username, password, credentialErr := parseSubscriptionProxyCredentials(right); credentialErr == nil {
+				return buildSubscriptionProxyURL("http", hostPort, username, password)
+			}
+		}
+		return "", fmt.Errorf("用户名密码或主机端口不合法")
+	}
+
+	// 同时兼容无需认证的 hostname:port，仍按 HTTP 代理处理。
+	hostPort, err := parseSubscriptionProxyHostPort(value)
+	if err != nil {
+		return "", fmt.Errorf("应填写受支持的代理格式")
+	}
+	return buildSubscriptionProxyURL("http", hostPort, "", "")
+}
+
+func normalizeExplicitSubscriptionProxyURL(value string) (string, error) {
+	parsedProxyURL, err := url.Parse(value)
+	if err != nil || parsedProxyURL.Host == "" {
+		return "", fmt.Errorf("代理 URL 不合法")
+	}
+	scheme := strings.ToLower(parsedProxyURL.Scheme)
+	switch scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return "", fmt.Errorf("仅支持 http、https、socks5 或 socks5h 协议")
+	}
+	if parsedProxyURL.Path != "" && parsedProxyURL.Path != "/" {
+		return "", fmt.Errorf("代理 URL 不能包含路径")
+	}
+	if parsedProxyURL.RawQuery != "" || parsedProxyURL.Fragment != "" {
+		return "", fmt.Errorf("代理 URL 不能包含查询参数或片段")
+	}
+	hostPort, err := buildSubscriptionProxyHostPort(parsedProxyURL.Hostname(), parsedProxyURL.Port())
+	if err != nil {
+		return "", err
+	}
+	normalized := &url.URL{Scheme: scheme, Host: hostPort, User: parsedProxyURL.User}
+	return normalized.String(), nil
+}
+
+func parseSubscriptionProxyHostPort(value string) (string, error) {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(value))
+	if err != nil {
+		return "", fmt.Errorf("主机和端口不合法")
+	}
+	return buildSubscriptionProxyHostPort(host, port)
+}
+
+func buildSubscriptionProxyHostPort(host string, port string) (string, error) {
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	port = strings.TrimSpace(port)
+	if host == "" || strings.ContainsAny(host, " \t/?#@") {
+		return "", fmt.Errorf("代理主机不合法")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", fmt.Errorf("代理端口必须是 1 到 65535 之间的数字")
+	}
+	return net.JoinHostPort(host, strconv.Itoa(portNumber)), nil
+}
+
+func parseSubscriptionProxyCredentials(value string) (string, string, error) {
+	username, password, ok := strings.Cut(strings.TrimSpace(value), ":")
+	if !ok || strings.TrimSpace(username) == "" || password == "" {
+		return "", "", fmt.Errorf("用户名或密码为空")
+	}
+	return strings.TrimSpace(username), password, nil
+}
+
+func buildSubscriptionProxyURL(scheme string, hostPort string, username string, password string) (string, error) {
+	proxyURL := &url.URL{Scheme: scheme, Host: hostPort}
+	if username != "" || password != "" {
+		if strings.TrimSpace(username) == "" || password == "" {
+			return "", fmt.Errorf("用户名或密码为空")
+		}
+		proxyURL.User = url.UserPassword(strings.TrimSpace(username), password)
+	}
+	return proxyURL.String(), nil
+}
+
+func fetchURLContentWithProxyPool(
+	targetURL string,
+	proxies []subscriptionProxyEndpoint,
+	configuredUserAgent string,
+	insecureSkipVerify bool,
+) (string, error) {
+	if len(proxies) == 0 {
+		return "", fmt.Errorf("订阅代理已开启，但代理池为空")
+	}
+	startIndex := int((subscriptionProxyCursor.Add(1) - 1) % uint64(len(proxies)))
+	attemptLimit := min(len(proxies), maxSubscriptionProxyAttempts)
+	var lastErr error
+	for offset := 0; offset < attemptLimit; offset++ {
+		proxyIndex := (startIndex + offset) % len(proxies)
+		log.Printf("[订阅抓取] 代理池出口=%d/%d 开始尝试", proxyIndex+1, len(proxies))
+
+		client, err := newSubscriptionHTTPClient(proxies[proxyIndex].URL, insecureSkipVerify)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		content, err := fetchURLContentWithClient(targetURL, client, configuredUserAgent)
+		client.CloseIdleConnections()
+		if err == nil {
+			return content, nil
+		}
+		lastErr = err
+		if !shouldTryNextSubscriptionProxy(err) {
+			return "", err
+		}
+		log.Printf("[订阅抓取] 代理池出口=%d/%d 失败，切换下一出口", proxyIndex+1, len(proxies))
+	}
+	return "", fmt.Errorf("代理池本次尝试的 %d 个出口均抓取失败: %w", attemptLimit, lastErr)
+}
+
+func shouldTryNextSubscriptionProxy(err error) bool {
+	var fetchErr *subscriptionFetchError
+	if !errors.As(err, &fetchErr) {
+		return false
+	}
+	if len(fetchErr.Failures) == 0 {
+		return true
+	}
+	for _, failure := range fetchErr.Failures {
+		if failure.Err != nil || failure.StatusCode == http.StatusForbidden || shouldSwitchSubscriptionProxyImmediately(failure.StatusCode) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldSwitchSubscriptionProxyImmediately(statusCode int) bool {
+	return statusCode == http.StatusProxyAuthRequired || statusCode == http.StatusTooManyRequests || statusCode >= 500
 }
 
 func buildSubscriptionFetchStrategies(configuredUserAgent string) []subscriptionFetchStrategy {
@@ -4111,7 +4428,7 @@ func fetchURLContentWithClient(targetURL string, client *http.Client, configured
 			safeErr := redactSubscriptionRequestError(err)
 			failures = append(failures, subscriptionFetchFailure{Err: safeErr})
 			log.Printf("[订阅抓取] 尝试=%d 策略=%s 结果=网络错误 错误=%v", i+1, strategy.Name, safeErr)
-			continue
+			break
 		}
 
 		bodyBytes, err := io.ReadAll(resp.Body)
@@ -4120,12 +4437,15 @@ func fetchURLContentWithClient(targetURL string, client *http.Client, configured
 		if err != nil {
 			failures = append(failures, subscriptionFetchFailure{Err: err})
 			log.Printf("[订阅抓取] 尝试=%d 策略=%s 状态码=%d 结果=读取失败", i+1, strategy.Name, resp.StatusCode)
-			continue
+			break
 		}
 
 		log.Printf("[订阅抓取] 尝试=%d 策略=%s 地址=%s 状态码=%d", i+1, strategy.Name, redactSubscriptionURL(targetURL), resp.StatusCode)
 		if resp.StatusCode != http.StatusOK {
 			failures = append(failures, subscriptionFetchFailure{StatusCode: resp.StatusCode})
+			if shouldSwitchSubscriptionProxyImmediately(resp.StatusCode) {
+				break
+			}
 			continue
 		}
 
@@ -4147,12 +4467,16 @@ func fetchURLContentWithClient(targetURL string, client *http.Client, configured
 }
 
 func newSubscriptionFetchError(failures []subscriptionFetchFailure) error {
+	return &subscriptionFetchError{Failures: append([]subscriptionFetchFailure(nil), failures...)}
+}
+
+func (e *subscriptionFetchError) Error() string {
 	statusCodes := make([]string, 0)
 	seenStatusCodes := make(map[int]bool)
 	hasForbidden := false
 	hasNotFound := false
 	var lastErr error
-	for _, failure := range failures {
+	for _, failure := range e.Failures {
 		if failure.StatusCode > 0 && !seenStatusCodes[failure.StatusCode] {
 			seenStatusCodes[failure.StatusCode] = true
 			statusCodes = append(statusCodes, strconv.Itoa(failure.StatusCode))
@@ -4166,18 +4490,18 @@ func newSubscriptionFetchError(failures []subscriptionFetchFailure) error {
 
 	statusSummary := strings.Join(statusCodes, "/")
 	if hasForbidden {
-		return fmt.Errorf("上游订阅服务拒绝请求（HTTP %s）。请将 SUBSCRIPTION_USER_AGENT 设置为本地客户端实际标识，并确认后端通过 SUBSCRIPTION_PROXY_URL 使用可用出口", statusSummary)
+		return fmt.Sprintf("上游订阅服务拒绝请求（HTTP %s）。请将 SUBSCRIPTION_USER_AGENT 设置为本地客户端实际标识，并确认已启用可用的订阅代理池（兼容 SUBSCRIPTION_PROXY_URL）", statusSummary)
 	}
 	if hasNotFound {
-		return fmt.Errorf("上游订阅地址返回 HTTP %s。若浏览器访问为 404 但 Clash 可用，通常是服务商限制了客户端标识，请配置 SUBSCRIPTION_USER_AGENT", statusSummary)
+		return fmt.Sprintf("上游订阅地址返回 HTTP %s。若浏览器访问为 404 但 Clash 可用，通常是服务商限制了客户端标识，请配置 SUBSCRIPTION_USER_AGENT", statusSummary)
 	}
 	if statusSummary != "" {
-		return fmt.Errorf("上游订阅服务返回异常状态码 %s", statusSummary)
+		return fmt.Sprintf("上游订阅服务返回异常状态码 %s", statusSummary)
 	}
 	if lastErr != nil {
-		return fmt.Errorf("订阅抓取失败: %w", lastErr)
+		return fmt.Sprintf("订阅抓取失败: %v", lastErr)
 	}
-	return fmt.Errorf("所有订阅抓取策略均未返回有效内容")
+	return "所有订阅抓取策略均未返回有效内容"
 }
 
 func redactSubscriptionURL(rawURL string) string {

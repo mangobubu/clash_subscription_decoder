@@ -21,7 +21,9 @@ services:
       - DB_SSLMODE=disable                    # SSL模式 (disable/require等)
       - DB_TIMEZONE=Asia/Shanghai             # 时区设置
       - SUBSCRIPTION_USER_AGENT=${SUBSCRIPTION_USER_AGENT:-clash.meta} # 上游订阅请求客户端标识
-      - SUBSCRIPTION_PROXY_URL=${SUBSCRIPTION_PROXY_URL:-}             # 可选：上游订阅抓取代理
+      - SUBSCRIPTION_PROXY_ENABLED=${SUBSCRIPTION_PROXY_ENABLED:-}     # 可选：是否启用订阅抓取代理池
+      - SUBSCRIPTION_PROXY_URLS=${SUBSCRIPTION_PROXY_URLS:-}           # 可选：逗号、分号或换行分隔的代理池
+      - SUBSCRIPTION_PROXY_URL=${SUBSCRIPTION_PROXY_URL:-}             # 兼容旧版：单个上游订阅抓取代理
       - SUBSCRIPTION_INSECURE_SKIP_VERIFY=${SUBSCRIPTION_INSECURE_SKIP_VERIFY:-false} # 自签名上游显式开关
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Linux 容器访问宿主机代理

@@ -67,9 +67,11 @@ type Config struct {
 		CaptchaNoiseColor string `toml:"captcha_noise_color"`
 	} `toml:"auth"`
 	SubscriptionFetch struct {
-		UserAgent          string `toml:"user_agent"`
-		ProxyURL           string `toml:"proxy_url"`
-		InsecureSkipVerify bool   `toml:"insecure_skip_verify"`
+		UserAgent          string   `toml:"user_agent"`
+		ProxyEnabled       bool     `toml:"proxy_enabled"`
+		ProxyURLs          []string `toml:"proxy_urls"`
+		ProxyURL           string   `toml:"proxy_url"`
+		InsecureSkipVerify bool     `toml:"insecure_skip_verify"`
 	} `toml:"subscription_fetch"`
 }
 
@@ -166,8 +168,18 @@ type Subscription struct {
 	UpdatedAt   int64  `gorm:"autoUpdateTime"`
 }
 
+// SubscriptionFetchSetting 保存可由管理界面维护的订阅抓取代理设置。
+// ID 固定为 1；启用时代理池按一行一个的标准 URL 持久化。
+type SubscriptionFetchSetting struct {
+	ID           uint   `gorm:"primarykey" json:"id"`
+	ProxyEnabled bool   `gorm:"not null;default:false" json:"proxy_enabled"`
+	ProxyPool    string `gorm:"type:text;not null" json:"proxy_pool"`
+	UpdatedAt    int64  `gorm:"autoUpdateTime" json:"updated_at"`
+}
+
 func initDB() {
 	var cfg Config
+	proxyEnabledConfigured := false
 	configData, err := os.ReadFile("config.toml")
 	if err == nil {
 		err = toml.Unmarshal(configData, &cfg)
@@ -175,6 +187,7 @@ func initDB() {
 			log.Fatalf("Failed to unmarshal config.toml: %v", err)
 		}
 		applyCaptchaConfigDefaults(&cfg, configData)
+		proxyEnabledConfigured = hasConfiguredSubscriptionProxySwitch(configData)
 	} else {
 		log.Println("config.toml not found, relying on environment variables or default values.")
 		cfg.Server.Port = defaultServerPort
@@ -244,6 +257,19 @@ func initDB() {
 	if envProxyURL := os.Getenv("SUBSCRIPTION_PROXY_URL"); envProxyURL != "" {
 		cfg.SubscriptionFetch.ProxyURL = envProxyURL
 	}
+	if envProxyURLs := os.Getenv("SUBSCRIPTION_PROXY_URLS"); envProxyURLs != "" {
+		cfg.SubscriptionFetch.ProxyURLs = splitSubscriptionProxyEnvironment(envProxyURLs)
+	}
+	if envProxyEnabled := os.Getenv("SUBSCRIPTION_PROXY_ENABLED"); envProxyEnabled != "" {
+		if enabled, err := strconv.ParseBool(envProxyEnabled); err == nil {
+			cfg.SubscriptionFetch.ProxyEnabled = enabled
+			proxyEnabledConfigured = true
+		}
+	}
+	if !proxyEnabledConfigured && (len(cfg.SubscriptionFetch.ProxyURLs) > 0 || strings.TrimSpace(cfg.SubscriptionFetch.ProxyURL) != "") {
+		// 旧版本只要配置了单代理就会使用；未显式提供新开关时继续保持该行为。
+		cfg.SubscriptionFetch.ProxyEnabled = true
+	}
 	if envInsecureSkipVerify := os.Getenv("SUBSCRIPTION_INSECURE_SKIP_VERIFY"); envInsecureSkipVerify != "" {
 		if enabled, err := strconv.ParseBool(envInsecureSkipVerify); err == nil {
 			cfg.SubscriptionFetch.InsecureSkipVerify = enabled
@@ -282,6 +308,7 @@ func initDB() {
 		&HiddenSubscriptionResource{},
 		&SubscriptionSource{},
 		&Subscription{},
+		&SubscriptionFetchSetting{},
 	)
 	if err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
@@ -293,9 +320,40 @@ func initDB() {
 	if err := migrateProfileSubscriptionSources(db); err != nil {
 		log.Fatalf("Failed to migrate profile subscription sources: %v", err)
 	}
-
 	DB = db
 	log.Println("Database initialized successfully.")
+}
+
+func splitSubscriptionProxyEnvironment(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool {
+		return r == '\r' || r == '\n' || r == ',' || r == ';'
+	})
+}
+
+func configuredSubscriptionProxyPool(cfg Config) string {
+	items := make([]string, 0, len(cfg.SubscriptionFetch.ProxyURLs)+1)
+	seen := make(map[string]bool, len(cfg.SubscriptionFetch.ProxyURLs)+1)
+	for _, item := range append(cfg.SubscriptionFetch.ProxyURLs, cfg.SubscriptionFetch.ProxyURL) {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[item] {
+			continue
+		}
+		seen[item] = true
+		items = append(items, item)
+	}
+	return strings.Join(items, "\n")
+}
+
+func hasConfiguredSubscriptionProxySwitch(configData []byte) bool {
+	var presence struct {
+		SubscriptionFetch struct {
+			ProxyEnabled *bool `toml:"proxy_enabled"`
+		} `toml:"subscription_fetch"`
+	}
+	if err := toml.Unmarshal(configData, &presence); err != nil {
+		return false
+	}
+	return presence.SubscriptionFetch.ProxyEnabled != nil
 }
 
 func applyCaptchaConfigDefaults(cfg *Config, configData []byte) {

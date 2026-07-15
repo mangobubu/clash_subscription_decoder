@@ -142,6 +142,199 @@ func TestNewSubscriptionHTTPClientValidatesProxyAndTLSOptions(t *testing.T) {
 	if proxyURL == nil || proxyURL.String() != "socks5://127.0.0.1:7890" {
 		t.Fatalf("代理地址 = %v，期望 socks5://127.0.0.1:7890", proxyURL)
 	}
+
+	directClient, err := newSubscriptionHTTPClient("", false)
+	if err != nil {
+		t.Fatalf("创建直连客户端失败: %v", err)
+	}
+	directTransport := directClient.Transport.(*http.Transport)
+	if directTransport.Proxy != nil {
+		t.Fatal("关闭代理后 Transport.Proxy 必须为 nil，不能继续读取系统代理环境变量")
+	}
+}
+
+func TestNormalizeSubscriptionProxyURLSupportsPoolFormats(t *testing.T) {
+	testCases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "主机端口用户名密码",
+			input: "proxy.example.com:8080:alice:secret",
+			want:  "http://alice:secret@proxy.example.com:8080",
+		},
+		{
+			name:  "显式 Socks5",
+			input: "socks5://alice:secret@proxy.example.com:1080",
+			want:  "socks5://alice:secret@proxy.example.com:1080",
+		},
+		{
+			name:  "用户名密码在前",
+			input: "alice:secret@proxy.example.com:8080",
+			want:  "http://alice:secret@proxy.example.com:8080",
+		},
+		{
+			name:  "主机端口在前",
+			input: "proxy.example.com:8080@alice:secret",
+			want:  "http://alice:secret@proxy.example.com:8080",
+		},
+		{
+			name:  "无认证 HTTP 代理",
+			input: "proxy.example.com:8080",
+			want:  "http://proxy.example.com:8080",
+		},
+		{
+			name:  "显式 HTTPS 代理",
+			input: "https://alice:secret@proxy.example.com:8443",
+			want:  "https://alice:secret@proxy.example.com:8443",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := normalizeSubscriptionProxyURL(testCase.input)
+			if err != nil {
+				t.Fatalf("normalizeSubscriptionProxyURL 返回错误: %v", err)
+			}
+			if got != testCase.want {
+				t.Fatalf("标准化结果 = %q，期望 %q", got, testCase.want)
+			}
+		})
+	}
+
+	specialURL, err := normalizeSubscriptionProxyURL("proxy.example.com:8080:alice:p@ss:word")
+	if err != nil {
+		t.Fatalf("特殊字符凭据标准化失败: %v", err)
+	}
+	parsedSpecialURL, err := url.Parse(specialURL)
+	if err != nil {
+		t.Fatalf("标准化后的代理 URL 无法解析: %v", err)
+	}
+	password, hasPassword := parsedSpecialURL.User.Password()
+	if parsedSpecialURL.User.Username() != "alice" || !hasPassword || password != "p@ss:word" {
+		t.Fatalf("特殊字符凭据未被安全保留: %q", specialURL)
+	}
+}
+
+func TestParseSubscriptionProxyPoolSkipsBlankAndDuplicateLines(t *testing.T) {
+	pool, err := parseSubscriptionProxyPool("\nproxy.example.com:8080:alice:secret\r\nhttp://alice:secret@proxy.example.com:8080\nproxy-2.example.com:8081\n")
+	if err != nil {
+		t.Fatalf("parseSubscriptionProxyPool 返回错误: %v", err)
+	}
+	if len(pool) != 2 {
+		t.Fatalf("去重后代理数量 = %d，期望 2", len(pool))
+	}
+	if pool[0].URL != "http://alice:secret@proxy.example.com:8080" || pool[1].URL != "http://proxy-2.example.com:8081" {
+		t.Fatalf("代理池标准化结果不符合预期: %#v", pool)
+	}
+}
+
+func TestParseSubscriptionProxyPoolRejectsInvalidLineWithoutLeakingCredentials(t *testing.T) {
+	_, err := parseSubscriptionProxyPool("proxy.example.com:8080\nftp://secret-user:secret-password@proxy.example.com:21")
+	if err == nil {
+		t.Fatal("不支持的代理协议应返回错误")
+	}
+	if !strings.Contains(err.Error(), "第 2 行") {
+		t.Fatalf("错误信息缺少行号: %v", err)
+	}
+	for _, sensitiveValue := range []string{"secret-user", "secret-password"} {
+		if strings.Contains(err.Error(), sensitiveValue) {
+			t.Fatalf("错误信息泄露代理凭据 %q: %v", sensitiveValue, err)
+		}
+	}
+}
+
+func TestConfiguredSubscriptionProxyPoolKeepsLegacyProxyAndDeduplicates(t *testing.T) {
+	var cfg Config
+	cfg.SubscriptionFetch.ProxyURLs = []string{
+		"proxy-1.example.com:8080",
+		"http://proxy-2.example.com:8081",
+	}
+	cfg.SubscriptionFetch.ProxyURL = "proxy-1.example.com:8080"
+
+	got := configuredSubscriptionProxyPool(cfg)
+	want := "proxy-1.example.com:8080\nhttp://proxy-2.example.com:8081"
+	if got != want {
+		t.Fatalf("配置代理池 = %q，期望 %q", got, want)
+	}
+}
+
+func TestSplitSubscriptionProxyEnvironmentSupportsCommonSeparators(t *testing.T) {
+	got := splitSubscriptionProxyEnvironment("proxy-1:8001,proxy-2:8002;proxy-3:8003\nproxy-4:8004")
+	if len(got) != 4 {
+		t.Fatalf("环境变量代理数量 = %d，期望 4: %v", len(got), got)
+	}
+}
+
+func TestHasConfiguredSubscriptionProxySwitchUsesTOMLStructure(t *testing.T) {
+	configData := []byte("[subscription_fetch] # 合法的行尾注释\nproxy_enabled = false\nproxy_url = \"proxy.example.com:8080\"\n\n[auth]\nproxy_enabled = true\n")
+	if !hasConfiguredSubscriptionProxySwitch(configData) {
+		t.Fatal("应识别 subscription_fetch 中显式配置的 proxy_enabled")
+	}
+	if hasConfiguredSubscriptionProxySwitch([]byte("[subscription_fetch]\nproxy_url = \"proxy.example.com:8080\"\n")) {
+		t.Fatal("未显式配置 proxy_enabled 时不应识别为已配置")
+	}
+}
+
+func TestFetchURLContentWithProxyPoolFallsBackAfterForbidden(t *testing.T) {
+	wantBody := buildTestSubscriptionYAML(20)
+	var mu sync.Mutex
+	forbiddenRequests := 0
+	successRequests := 0
+
+	forbiddenProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		forbiddenRequests++
+		mu.Unlock()
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer forbiddenProxy.Close()
+
+	successProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		successRequests++
+		mu.Unlock()
+		_, _ = w.Write([]byte(wantBody))
+	}))
+	defer successProxy.Close()
+
+	pool, err := parseSubscriptionProxyPool(forbiddenProxy.URL + "\n" + successProxy.URL)
+	if err != nil {
+		t.Fatalf("解析测试代理池失败: %v", err)
+	}
+	subscriptionProxyCursor.Store(0)
+	got, err := fetchURLContentWithProxyPool(
+		"http://subscription.invalid/config?token=sensitive-token-value",
+		pool,
+		"clash.meta",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("代理池故障转移返回错误: %v", err)
+	}
+	if got != wantBody {
+		t.Fatal("代理池故障转移后的订阅内容与期望不一致")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if forbiddenRequests == 0 || successRequests != 1 {
+		t.Fatalf("代理请求次数不符合预期，403 出口=%d，成功出口=%d", forbiddenRequests, successRequests)
+	}
+}
+
+func TestShouldSwitchSubscriptionProxyImmediately(t *testing.T) {
+	for _, statusCode := range []int{http.StatusProxyAuthRequired, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway} {
+		if !shouldSwitchSubscriptionProxyImmediately(statusCode) {
+			t.Fatalf("状态码 %d 应立即切换代理", statusCode)
+		}
+	}
+	for _, statusCode := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound} {
+		if shouldSwitchSubscriptionProxyImmediately(statusCode) {
+			t.Fatalf("状态码 %d 不应跳过 User-Agent 探测", statusCode)
+		}
+	}
 }
 
 func TestRedactSubscriptionURLRemovesCredentials(t *testing.T) {
