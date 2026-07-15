@@ -217,15 +217,17 @@ func TestNormalizeSubscriptionProxyURLSupportsPoolFormats(t *testing.T) {
 	}
 }
 
-func TestParseSubscriptionProxyPoolSkipsBlankAndDuplicateLines(t *testing.T) {
+func TestParseSubscriptionProxyPoolSkipsBlankAndKeepsDuplicateLines(t *testing.T) {
 	pool, err := parseSubscriptionProxyPool("\nproxy.example.com:8080:alice:secret\r\nhttp://alice:secret@proxy.example.com:8080\nproxy-2.example.com:8081\n")
 	if err != nil {
 		t.Fatalf("parseSubscriptionProxyPool 返回错误: %v", err)
 	}
-	if len(pool) != 2 {
-		t.Fatalf("去重后代理数量 = %d，期望 2", len(pool))
+	if len(pool) != 3 {
+		t.Fatalf("保留重复行后代理数量 = %d，期望 3", len(pool))
 	}
-	if pool[0].URL != "http://alice:secret@proxy.example.com:8080" || pool[1].URL != "http://proxy-2.example.com:8081" {
+	if pool[0].URL != "http://alice:secret@proxy.example.com:8080" ||
+		pool[1].URL != "http://alice:secret@proxy.example.com:8080" ||
+		pool[2].URL != "http://proxy-2.example.com:8081" {
 		t.Fatalf("代理池标准化结果不符合预期: %#v", pool)
 	}
 }

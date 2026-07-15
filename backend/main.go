@@ -4173,7 +4173,6 @@ func newSubscriptionHTTPClient(proxyURL string, insecureSkipVerify bool) (*http.
 func parseSubscriptionProxyPool(rawPool string) ([]subscriptionProxyEndpoint, error) {
 	lines := strings.Split(strings.ReplaceAll(rawPool, "\r\n", "\n"), "\n")
 	proxies := make([]subscriptionProxyEndpoint, 0, len(lines))
-	seen := make(map[string]bool, len(lines))
 	for lineIndex, rawLine := range lines {
 		line := strings.TrimSpace(rawLine)
 		if line == "" {
@@ -4186,13 +4185,9 @@ func parseSubscriptionProxyPool(rawPool string) ([]subscriptionProxyEndpoint, er
 		if err != nil {
 			return nil, fmt.Errorf("代理池第 %d 行格式无效：%w", lineIndex+1, err)
 		}
-		if seen[normalizedURL] {
-			continue
-		}
 		if len(proxies) >= maxSubscriptionProxyPoolEntries {
 			return nil, fmt.Errorf("代理池最多允许 %d 个代理", maxSubscriptionProxyPoolEntries)
 		}
-		seen[normalizedURL] = true
 		proxies = append(proxies, subscriptionProxyEndpoint{URL: normalizedURL})
 	}
 	return proxies, nil
