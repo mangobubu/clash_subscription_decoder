@@ -262,7 +262,35 @@ The current `docker-compose.yml` targets a production environment with an existi
 - `DB_SSLMODE`
 - `DB_TIMEZONE`
 - `SERVER_PORT`
+- `BASE_IMAGE_REGISTRY`
 - `networks.1panel-network.external`
+
+### Build acceleration in mainland China
+
+The Dockerfile already uses mainland mirrors for APT, npm/pnpm, and Go Modules. Base images must be pulled before those settings take effect, so the project also provides the `BASE_IMAGE_REGISTRY` build argument while keeping official `docker.io` as the default.
+
+Create a `.env` file in the project root to select a reachable Docker Hub proxy for this project:
+
+```dotenv
+BASE_IMAGE_REGISTRY=docker.m.daocloud.io
+```
+
+Then pull and rebuild the image:
+
+```bash
+docker compose build --pull app
+docker compose up -d --force-recreate app
+```
+
+Alternatively, keep `BASE_IMAGE_REGISTRY=docker.io` and configure a global Docker daemon mirror in `/etc/docker/daemon.json`:
+
+```json
+{
+  "registry-mirrors": ["https://your-trusted-registry-mirror"]
+}
+```
+
+Restart Docker after changing the daemon configuration. Public third-party proxies are provided only as network compatibility examples; production deployments should prefer a trusted enterprise mirror or a self-hosted registry.
 
 Start the service:
 

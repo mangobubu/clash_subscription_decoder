@@ -5,6 +5,7 @@
 
 # --- 敏感本地配置文件（绝对不能上传！） ---
 backend/config.toml
+/.env
 
 # --- Go 后端临时产物 & 编译大二进制 ---
 backend/tmp/

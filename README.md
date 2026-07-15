@@ -262,7 +262,35 @@ release/
 - `DB_SSLMODE`
 - `DB_TIMEZONE`
 - `SERVER_PORT`
+- `BASE_IMAGE_REGISTRY`
 - `networks.1panel-network.external`
+
+### 中国大陆构建加速
+
+Dockerfile 已为 APT、npm/pnpm 和 Go Modules 配置国内加速源。由于基础镜像必须在这些配置生效前拉取，项目额外提供 `BASE_IMAGE_REGISTRY` 构建参数，默认仍使用官方 `docker.io`。
+
+可在项目根目录创建 `.env`，为当前项目指定可访问的 Docker Hub 镜像代理：
+
+```dotenv
+BASE_IMAGE_REGISTRY=docker.m.daocloud.io
+```
+
+然后重新拉取并构建：
+
+```bash
+docker compose build --pull app
+docker compose up -d --force-recreate app
+```
+
+也可以保持 `BASE_IMAGE_REGISTRY=docker.io`，改为在 `/etc/docker/daemon.json` 中配置 Docker daemon 全局镜像加速：
+
+```json
+{
+  "registry-mirrors": ["https://你的可信镜像加速地址"]
+}
+```
+
+修改 daemon 配置后需要重启 Docker。公共第三方镜像代理仅作为网络兼容示例，生产环境应优先使用经过信任评估的企业镜像服务或自建镜像仓库。
 
 启动命令：
 

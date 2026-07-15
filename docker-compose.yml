@@ -6,6 +6,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        BASE_IMAGE_REGISTRY: ${BASE_IMAGE_REGISTRY:-docker.io}
     container_name: clash-subscription-decoder-app
     ports:
       - "${SERVER_PORT:-8080}:${SERVER_PORT:-8080}"
