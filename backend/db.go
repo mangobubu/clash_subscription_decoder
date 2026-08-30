@@ -56,6 +56,7 @@ type Config struct {
 		TimeZone string `toml:"timezone"`
 	} `toml:"database"`
 	Auth struct {
+		LoginEntryHash    string `toml:"login_entry_hash"`
 		CaptchaEnabled    bool   `toml:"captcha_enabled"`
 		CaptchaLength     int    `toml:"captcha_length"`
 		CaptchaWidth      int    `toml:"captcha_width"`
@@ -244,6 +245,10 @@ func initDB() {
 	if envTimeZone := os.Getenv("DB_TIMEZONE"); envTimeZone != "" {
 		cfg.Database.TimeZone = envTimeZone
 	}
+	cfg.Auth.LoginEntryHash = selectLoginEntryHashOverride(
+		cfg.Auth.LoginEntryHash,
+		os.Getenv("LOGIN_ENTRY_HASH"),
+	)
 
 	// 针对云原生部署：从环境变量读取并覆写验证码开关配置
 	if envCaptcha := os.Getenv("CAPTCHA_ENABLED"); envCaptcha != "" {
@@ -276,8 +281,6 @@ func initDB() {
 		}
 	}
 
-	AppConfig = cfg
-
 	passKey := string([]byte{'p', 'a', 's', 's', 'w', 'o', 'r', 'd'})
 	dsn := fmt.Sprintf(
 		"host=%s user=%s %s=%s dbname=%s port=%d sslmode=%s TimeZone=%s",
@@ -309,6 +312,7 @@ func initDB() {
 		&SubscriptionSource{},
 		&Subscription{},
 		&SubscriptionFetchSetting{},
+		&AuthSetting{},
 	)
 	if err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
@@ -320,6 +324,12 @@ func initDB() {
 	if err := migrateProfileSubscriptionSources(db); err != nil {
 		log.Fatalf("Failed to migrate profile subscription sources: %v", err)
 	}
+	loginEntryHash, err := initializeLoginEntryHash(db, cfg.Auth.LoginEntryHash)
+	if err != nil {
+		log.Fatalf("Failed to initialize login entry: %v", err)
+	}
+	cfg.Auth.LoginEntryHash = loginEntryHash
+	AppConfig = cfg
 	DB = db
 	log.Println("Database initialized successfully.")
 }

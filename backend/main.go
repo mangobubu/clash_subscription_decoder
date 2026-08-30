@@ -143,47 +143,12 @@ func main() {
 		log.Fatalf("Failed to sub-embed frontend files: %v", err)
 	}
 
-	// 注册 SPA 静态资源路由与 Fallback 处理
-	r.NoRoute(func(c *gin.Context) {
-		path := c.Request.URL.Path
-
-		// 如果是后端 API 或配置订阅请求但没匹配到，走 404 处理，不要 fallback 返回 index.html
-		if isBackendOnlyPath(path) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Not Found"})
-			return
-		}
-
-		// 检查 embed 中是否存在该请求的文件
-		filePath := strings.TrimPrefix(path, "/")
-		if filePath == "" {
-			filePath = "index.html"
-		}
-
-		_, err := subFS.Open(filePath)
-		if err == nil {
-			// 文件存在，直接交给 http.FileServer 处理
-			http.FileServer(http.FS(subFS)).ServeHTTP(c.Writer, c.Request)
-			return
-		}
-
-		// 如果文件不存在，执行 SPA 路由的 Fallback (返回 index.html)
-		indexFile, err := subFS.Open("index.html")
-		if err != nil {
-			c.String(http.StatusNotFound, "Embedded frontend assets not found or index.html missing")
-			return
-		}
-		defer indexFile.Close()
-
-		content, err := io.ReadAll(indexFile)
-		if err != nil {
-			c.String(http.StatusInternalServerError, "Internal Server Error")
-			return
-		}
-		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
-	})
+	// 仅允许随机登录入口加载单页应用；其他未知页面返回真实 404。
+	r.NoRoute(newFrontendRouteHandler(subFS, loginEntryPath(AppConfig.Auth.LoginEntryHash)))
 
 	// 启动服务，端口由 config.toml 的 [server].port 或 SERVER_PORT 环境变量控制
 	serverAddress := fmt.Sprintf(":%d", AppConfig.Server.Port)
+	log.Printf("控制台登录入口: %s", loginEntryPath(AppConfig.Auth.LoginEntryHash))
 	log.Printf("Starting Clash Subscription Decoder backend on %s...", serverAddress)
 	if err := r.Run(serverAddress); err != nil {
 		log.Fatalf("Failed to run server: %v", err)

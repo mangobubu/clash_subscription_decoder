@@ -25,6 +25,9 @@ proxy_url = ""
 insecure_skip_verify = false
 
 [auth]
+# 可选：控制台登录入口哈希，仅接受 32 位十六进制字符（访问路径为 /<哈希>）
+# 环境变量 LOGIN_ENTRY_HASH 优先于此配置；两者均为空时首次启动会随机生成并持久化到数据库
+login_entry_hash = ""
 # 是否开启验证码 (true/false)
 captcha_enabled = true
 # 验证码字符长度 (建议 4-6)

@@ -20,6 +20,7 @@ services:
       - DB_PORT=5432                          # 外部数据库端口
       - DB_SSLMODE=disable                    # SSL模式 (disable/require等)
       - DB_TIMEZONE=Asia/Shanghai             # 时区设置
+      - LOGIN_ENTRY_HASH=${LOGIN_ENTRY_HASH:-} # 可选：32位十六进制控制台入口；留空则首次生成并持久化
       - SUBSCRIPTION_USER_AGENT=${SUBSCRIPTION_USER_AGENT:-clash.meta} # 上游订阅请求客户端标识
       - SUBSCRIPTION_PROXY_ENABLED=${SUBSCRIPTION_PROXY_ENABLED:-}     # 可选：是否启用订阅抓取代理池
       - SUBSCRIPTION_PROXY_URLS=${SUBSCRIPTION_PROXY_URLS:-}           # 可选：逗号、分号或换行分隔的代理池

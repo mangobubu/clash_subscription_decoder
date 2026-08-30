@@ -23,6 +23,9 @@
 - 🔒 **配置级 Token 鉴权**
   每个订阅配置拥有独立 Token。重新生成 Token 后，旧地址立即失效；复制订阅地址只读取当前有效 Token，不会误覆盖旧地址。
 
+- 🛡️ **随机控制台入口**
+  控制台仅通过 `/<32 位十六进制哈希>` 入口访问。未配置入口时系统会首次随机生成并持久化，其他未知页面返回真实 HTTP 404。
+
 - 🧩 **结构化 YAML 合并与本地接管**
   后端使用 `yaml.v3` 节点树处理 Clash/Mihomo YAML，将自定义节点、策略组、规则、排序和隐藏状态重新应用到订阅结果中。订阅资源可以在后台一键接管为本地资源，后续按当前配置独立维护。
 
@@ -149,6 +152,7 @@ proxy_url = ""
 insecure_skip_verify = false
 
 [auth]
+login_entry_hash = ""
 captcha_enabled = true
 ```
 
@@ -159,7 +163,17 @@ go mod tidy
 go run main.go
 ```
 
-后端默认监听 `http://localhost:8080`。
+后端默认监听 `http://localhost:8080`。控制台需要通过启动日志打印的随机哈希入口访问，例如 `http://localhost:8080/0123456789abcdef0123456789abcdef`。
+
+#### 控制台登录入口
+
+- 登录入口格式固定为 `/<32 位十六进制哈希>`，哈希配置值本身不包含开头的 `/`。
+- 环境变量 `LOGIN_ENTRY_HASH` 的优先级高于 `config.toml` 中的 `[auth].login_entry_hash`。
+- 两项均为空时，系统会在首次启动时安全生成入口哈希并持久化到 PostgreSQL，后续重启继续使用同一入口。
+- 启动日志会打印当前有效的完整登录入口路径。请将它与实际访问域名组合使用、妥善保存，并避免公开到截图、监控标签或公共日志中。
+- `/`、`/login`、错误哈希及其他不存在的页面都会返回真实 HTTP 404，不会回退到控制台页面。
+
+如果通过 Nginx、Caddy 或其他反向代理部署，应将请求原样转发给后端，并保留后端返回的 404。不要使用 `try_files $uri /index.html` 或等价规则把任意路径回退到 `index.html`，否则会绕过不存在页面的 404 行为。
 
 #### 上游订阅返回 403/404
 
@@ -234,7 +248,7 @@ release/
 ## 📖 使用指南
 
 1. **初始化管理员**
-   首次访问控制台时，系统会进入初始化模式。创建管理员账号后，再使用该账号登录。验证码可通过 `config.toml` 的 `[auth]` 配置开启或关闭。
+   从启动日志取得 `/<32 位十六进制哈希>` 控制台入口并访问。首次进入时系统会进入初始化模式；创建管理员账号后，再使用该账号登录。验证码可通过 `config.toml` 的 `[auth]` 配置开启或关闭。
 
 2. **创建配置**
    可以创建两类配置：
@@ -275,6 +289,7 @@ release/
 - `DB_SSLMODE`
 - `DB_TIMEZONE`
 - `SERVER_PORT`
+- `LOGIN_ENTRY_HASH`（可选，优先于 `[auth].login_entry_hash`）
 - `BASE_IMAGE_REGISTRY`
 - `networks.1panel-network.external`
 
@@ -320,7 +335,7 @@ docker compose down
 docker compose up -d --build
 ```
 
-注意：Compose 文件当前不会自动创建 PostgreSQL 容器，也不会自动创建外部网络。请先确保数据库和外部网络已可用，或按自己的部署环境调整 Compose 配置。
+注意：Compose 文件当前不会自动创建 PostgreSQL 容器，也不会自动创建外部网络。请先确保数据库和外部网络已可用，或按自己的部署环境调整 Compose 配置。`LOGIN_ENTRY_HASH` 留空时可从容器启动日志取得首次生成并持久化的入口；反向代理同样不得把未知路径回退到 `index.html`。
 
 ---
 

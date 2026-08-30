@@ -23,6 +23,9 @@ Traditional online subscription converters rarely preserve personalized configur
 - 🔒 **Profile-Level Token Authentication**
   Each subscription profile has its own token. Regenerating a token immediately invalidates the old URL. Copying a subscription URL only reads the current token and does not overwrite it.
 
+- 🛡️ **Random Console Entry**
+  The console is available only at `/<32-character hexadecimal hash>`. When no entry is configured, the server generates and persists one on first startup; other unknown pages return a real HTTP 404.
+
 - 🧩 **Structured YAML Merge & Local Takeover**
   The backend uses `yaml.v3` node trees to process Clash/Mihomo YAML, then reapplies custom nodes, proxy groups, rules, ordering, and hidden subscription resources. Subscription resources can be taken over as local resources and maintained independently per profile.
 
@@ -149,6 +152,7 @@ proxy_url = ""
 insecure_skip_verify = false
 
 [auth]
+login_entry_hash = ""
 captcha_enabled = true
 ```
 
@@ -159,7 +163,17 @@ go mod tidy
 go run main.go
 ```
 
-The backend listens on `http://localhost:8080` by default.
+The backend listens on `http://localhost:8080` by default. Open the console through the random hash entry printed in the startup log, for example `http://localhost:8080/0123456789abcdef0123456789abcdef`.
+
+#### Console login entry
+
+- The path format is `/<32-character hexadecimal hash>`; configure the hash itself without the leading `/`.
+- `LOGIN_ENTRY_HASH` takes precedence over `[auth].login_entry_hash` in `config.toml`.
+- If both are empty, the server securely generates a hash on first startup and persists it in PostgreSQL for subsequent restarts.
+- The startup log prints the current full login entry path. Combine it with the actual deployment origin, and keep it out of public screenshots, monitoring labels, and public logs.
+- `/`, `/login`, incorrect hashes, and other nonexistent pages return a real HTTP 404 instead of the console page.
+
+When deploying behind Nginx, Caddy, or another reverse proxy, forward requests unchanged and preserve backend 404 responses. Do not use `try_files $uri /index.html` or an equivalent catch-all fallback, because it defeats the expected 404 behavior.
 
 #### Upstream subscription returns 403/404
 
@@ -234,7 +248,7 @@ Run the binary from inside the `release` directory. Make sure the PostgreSQL con
 ## 📖 User Guide
 
 1. **Initialize Administrator**
-   On the first visit, the console enters initialization mode. Create an administrator account, then log in with it. Captcha can be enabled or disabled through the `[auth]` section in `config.toml`.
+   Obtain the `/<32-character hexadecimal hash>` console entry from the startup log and open it. On the first visit, the console enters initialization mode. Create an administrator account, then log in with it. Captcha can be enabled or disabled through the `[auth]` section in `config.toml`.
 
 2. **Create Profiles**
    Two profile types are supported:
@@ -275,6 +289,7 @@ The current `docker-compose.yml` targets a production environment with an existi
 - `DB_SSLMODE`
 - `DB_TIMEZONE`
 - `SERVER_PORT`
+- `LOGIN_ENTRY_HASH` (optional; overrides `[auth].login_entry_hash`)
 - `BASE_IMAGE_REGISTRY`
 - `networks.1panel-network.external`
 
@@ -320,7 +335,7 @@ docker compose down
 docker compose up -d --build
 ```
 
-Note: the current Compose file does not create a PostgreSQL container or the external network automatically. Ensure both are available first, or adjust the Compose file for your deployment environment.
+Note: the current Compose file does not create a PostgreSQL container or the external network automatically. Ensure both are available first, or adjust the Compose file for your deployment environment. When `LOGIN_ENTRY_HASH` is empty, read the first generated and persisted entry from the container startup log. A reverse proxy must not fall back unknown paths to `index.html`.
 
 ---
 

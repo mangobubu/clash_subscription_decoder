@@ -34,10 +34,10 @@ func TestIsBackendOnlyPath(t *testing.T) {
 		}
 	}
 
-	spaPaths := []string{"/", "/nodes", "/settings"}
-	for _, path := range spaPaths {
+	frontendControlledPaths := []string{"/", "/nodes", "/settings"}
+	for _, path := range frontendControlledPaths {
 		if isBackendOnlyPath(path) {
-			t.Fatalf("expected path %q to allow SPA fallback", path)
+			t.Fatalf("expected path %q to be handled by the strict frontend route handler", path)
 		}
 	}
 }
